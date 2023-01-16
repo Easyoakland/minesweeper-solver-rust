@@ -1,0 +1,25 @@
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+
+[package]
+name = "minesweeper_solver_in_rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dev-dependencies]
+criterion = "0.4"
+
+[[bench]]
+name = "my_benchmark"
+harness = false
+
+[[bench]]
+name = "slow_benchmarks"
+harness = false
+
+[dependencies]
+scrap = "0.5.0"
+image = "0.24.0"
