@@ -17,9 +17,10 @@ name = "my_benchmark"
 harness = false
 
 [[bench]]
-name = "slow_benchmarks"
+name = "framerate_benchmarks"
 harness = false
 
 [dependencies]
-scrap = "0.5.0"
+# scrap = "0.5.0"
 image = "0.24.0"
+captrs = "0.3.1"

@@ -1,63 +1,71 @@
-use scrap::{Capturer, Display};
-use std::io::ErrorKind::WouldBlock;
-use std::time::Duration;
-use std::thread;
-use image::{Rgb, RgbImage};
+use captrs::{Bgr8, Capturer};
+use image::{Rgb, RgbImage, Rgba, RgbaImage};
 
+/// Returns a capturer instance. Selects monitor based upon passed id zero indexed.
+pub fn setup_capturer(id: usize) -> Capturer {
+    return Capturer::new(id).unwrap();
+}
 
-/// Returns a vector of concatenated RGBA values.
-#[inline]
-pub fn capture_frame<'a>(
-    capturer: &mut Capturer,
-    one_frame: Duration,
-    width: usize,
-    height: usize,
-) -> Vec<u8> {
+/// Returns a vector of concatenated RGB values corresponding to a captured frame.
+pub fn capture_frame(capturer: &mut Capturer) -> Vec<u8> {
     loop {
-        // Wait until there's a frame.
-        let buffer = match capturer.frame() {
-            Ok(buffer) => buffer,
-            Err(error) => {
-                if error.kind() == WouldBlock {
-                    // Keep spinning.
-                    // println!("Waiting...");
-                    thread::sleep(one_frame);
-                    continue;
-                } else {
-                    panic!("Error: {}", error);
+        let temp = capturer.capture_frame();
+        match temp {
+            Ok(ps) => {
+                let mut rgb_vec = Vec::new();
+                for Bgr8 {
+                    r,
+                    g,
+                    b, /* a */
+                    ..
+                } in ps.into_iter()
+                {
+                    rgb_vec.push(r);
+                    rgb_vec.push(g);
+                    rgb_vec.push(b);
+                    /* rgb_vec.push(a); */
                 }
+
+                // Make sure the image is not a failed black screen.
+                if !rgb_vec.iter().any(|&x| x != 0) {
+                    // thread::sleep(Duration::new(0, 1)); // sleep 1ms
+                    // println!("All black");
+                    continue;
+                };
+                return rgb_vec;
             }
-        };
-
-        // Make sure the image is not a failed black screen.
-        if !buffer.to_vec().iter().any(|&x| x != 0) {
-            thread::sleep(Duration::new(0, 1)); // sleep 1ms
-            continue;
+            Err(_) => continue,
         }
-
-        // Flip the BGRA image into a RGBA image
-        let mut bitflipped = Vec::with_capacity(width * height * 4);
-        let stride = buffer.len() / height;
-
-        for y in 0..height {
-            for x in 0..width {
-                let i = stride * y + 4 * x;
-                bitflipped.extend_from_slice(&[buffer[i + 2], buffer[i + 1], buffer[i], 255]);
-            }
-        }
-
-        return bitflipped;
     }
 }
 
 /// Expects buffer to be a RGBA image.
-pub fn save_frame(path: &str, buffer: Vec<u8>, width: usize, height: usize) {
+pub fn save_rgba_frame(path: &str, buffer: Vec<u8>, width: usize, height: usize) {
+    let stride = buffer.len() / height;
+
+    let mut img = RgbaImage::new(width as u32, height as u32);
+    for x in 0..width {
+        for y in 0..height {
+            let i = stride * y + 4 * x;
+            img.put_pixel(
+                x as u32,
+                y as u32,
+                Rgba([buffer[i], buffer[i + 1], buffer[i + 2], buffer[i + 3]]),
+            );
+        }
+    }
+    img.save(path)
+        .expect("Should have been able to save image to path.");
+}
+
+/// Expects buffer to be a RGB image.
+pub fn save_rgb_frame(path: &str, buffer: Vec<u8>, width: usize, height: usize) {
     let stride = buffer.len() / height;
 
     let mut img = RgbImage::new(width as u32, height as u32);
     for x in 0..width {
         for y in 0..height {
-            let i = stride * y + 4 * x;
+            let i = stride * y + 3 * x;
             img.put_pixel(
                 x as u32,
                 y as u32,
@@ -69,20 +77,20 @@ pub fn save_frame(path: &str, buffer: Vec<u8>, width: usize, height: usize) {
         .expect("Should have been able to save image to path.");
 }
 
-/// Returns a capturer for the specified display.
-pub fn setup_capturer(id: usize) -> Capturer{
-    // Get capturer for capturing frames from screen.
-    let mut displays = Display::all().expect("Couldn't find primary display.");
-    let display = displays.swap_remove(id);
-    let capturer = Capturer::new(display).expect("Couldn't begin capture.");
-    return capturer;
-}
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// This test requires manual confirmation.
     #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+    fn record_screen_to_file() {
+        let mut capturer = setup_capturer(0);
+        let (width, height) = capturer.geometry();
+        for i in 0..=5 {
+            let rgb_vec = capture_frame(&mut capturer);
+            let path = format!("test/IMG{i}.png");
+            save_rgb_frame(&path, rgb_vec, width as usize, height as usize);
+            // assert_eq!(std::path::Path::new(&path).exists(), true); // Check file now exists.
+        }
     }
 }
