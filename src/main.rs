@@ -1,11 +1,6 @@
-use minesweeper_solver_in_rust::{setup_capturer, Game};
+use minesweeper_solver_in_rust::Game;
 
-fn main() {
-    let mut capturer = setup_capturer(0);
-
-    // TODO remove below underscores.
-    let (_width, _height) = capturer.geometry();
-
+fn main(){
     let game = Game::new(
         [
             "cell_images/1.png",
@@ -20,8 +15,10 @@ fn main() {
             "cell_images/cell.png",
             "cell_images/complete.png",
         ],
-        &mut capturer,
+        0,
     );
 
-    dbg!(game);
+    let center = (game.cell_width/2, game.cell_height/2);
+    // game.reveal(center);
+    game.exit(false);
 }
