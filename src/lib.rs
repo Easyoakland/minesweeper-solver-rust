@@ -1,5 +1,5 @@
 use captrs::{Bgr8, Capturer};
-use image::{imageops, io, DynamicImage, /* ImageBuffer, Rgb, */ RgbImage};
+use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer, */ Rgb, RgbImage};
 /* use imageproc::rgb_image; */
 use std::ops::{Add, Sub};
 
@@ -107,8 +107,7 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
                 break 'y_loop;
             }
             // Generate the cropped image.
-            let sub_sup_image =
-                imageops::crop_imm(&sup_image, x, y, sub_width, sub_height).to_image();
+            let sub_sup_image = imageops::crop_imm(&sup_image, x, y, sub_width, sub_height);
 
             // Following code is used for debugging. It will print the sub image and section of super image being examined.
             /*image::save_buffer(
@@ -127,8 +126,12 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
             ).expect("Can't save sup_sup_image"); */
 
             // For each point if it doesn't match skip to next position.
-            for (sup_data, sub_data) in sub_sup_image.iter().zip(sub_image.iter()) {
-                if sub_data != sup_data {
+            for (sup_data, sub_data) in sub_sup_image
+                .pixels()
+                .map(|(_x, _y, pixel)| pixel)
+                .zip(sub_image.pixels())
+            {
+                if sub_data != &sup_data {
                     continue 'x_loop;
                 }
             }
