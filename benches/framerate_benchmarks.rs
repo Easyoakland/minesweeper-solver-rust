@@ -90,7 +90,7 @@ fn raw_valid_frame_nonblack_benchmark_captrs(c: &mut Criterion) {
 criterion_group! {
 
     name = framerate_benchmarks;
-    config = Criterion::default().sample_size(100).measurement_time(Duration::from_secs(50));
+    config = Criterion::default().sample_size(60).measurement_time(Duration::from_secs(30));
     targets = /* capture_frame_benchmark, raw_frame_benchmark, raw_valid_frame_benchmark, raw_valid_frame_nonblack_benchmark, */ raw_valid_frame_nonblack_benchmark_captrs
 }
 

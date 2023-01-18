@@ -58,3 +58,42 @@ use std::thread; */
     }
 }
  */
+
+ /* /// Expects buffer to be a RGBA image.
+pub fn save_rgba_frame(path: &str, buffer: Vec<u8>, width: usize, height: usize) {
+    let stride = buffer.len() / height;
+
+    let mut img = RgbaImage::new(width as u32, height as u32);
+    for x in 0..width {
+        for y in 0..height {
+            let i = stride * y + 4 * x;
+            img.put_pixel(
+                x as u32,
+                y as u32,
+                Rgba([buffer[i], buffer[i + 1], buffer[i + 2], buffer[i + 3]]),
+            );
+        }
+    }
+    img.save(path)
+        .expect("Should have been able to save image to path.");
+}
+ */
+
+ /* /// Expects buffer to be a RGB image.
+pub fn save_rgb_frame(path: &str, buffer: Vec<u8>, width: usize, height: usize) {
+    let stride = buffer.len() / height;
+
+    let mut img = RgbImage::new(width as u32, height as u32);
+    for x in 0..width {
+        for y in 0..height {
+            let i = stride * y + 3 * x;
+            img.put_pixel(
+                x as u32,
+                y as u32,
+                Rgb([buffer[i], buffer[i + 1], buffer[i + 2]]),
+            );
+        }
+    }
+    img.save(path)
+        .expect("Should have been able to save image to path.");
+} */
