@@ -1,6 +1,6 @@
 use criterion::{/* black_box, */ criterion_group, criterion_main, Criterion};
 use image::io;
-use minesweeper_solver_in_rust::{locate_all, Point};
+use minesweeper_solver_in_rust::locate_all;
 
 /* fn fibonacci(n: u64) -> u64 {
     /*     match n {

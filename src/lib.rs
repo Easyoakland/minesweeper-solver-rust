@@ -1,5 +1,5 @@
 use captrs::{Bgr8, Capturer};
-use image::{imageops, DynamicImage, /* ImageBuffer, Rgb, */ RgbImage};
+use image::{imageops, io, DynamicImage, /* ImageBuffer, Rgb, */ RgbImage};
 /* use imageproc::rgb_image; */
 use std::ops::{Add, Sub};
 
@@ -22,7 +22,7 @@ impl Sub for Point {
     }
 }
 
-/// Returns a capturer instance. Selects monitor based upon passed id zero indexed.
+/// Returns a capturer instance. Selects monitor based upon passed id. Zero indexed.
 pub fn setup_capturer(id: usize) -> Capturer {
     return Capturer::new(id).unwrap();
 }
@@ -32,14 +32,14 @@ fn capture_rgb_frame(capturer: &mut Capturer) -> Vec<u8> {
     loop {
         let temp = capturer.capture_frame();
         match temp {
-            Ok(ps) => {
+            Ok(frame) => {
                 let mut rgb_vec = Vec::new();
                 for Bgr8 {
                     r,
                     g,
                     b, /* a */
                     ..
-                } in ps.into_iter()
+                } in frame.into_iter()
                 {
                     rgb_vec.push(r);
                     rgb_vec.push(g);
@@ -70,8 +70,8 @@ pub fn capture_image_frame(capturer: &mut Capturer) -> RgbImage {
     .expect("Frame was unable to be captured and converted to RGB.");
 }
 
-/// Expects buffer to be a RGB image.
-pub fn save_rgb_frame(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
+/// Saves an RGB image vector to a the given path.
+pub fn save_rgb_vector(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
     let img =
         RgbImage::from_raw(width, height, buffer).expect("Couldn't convert buffer to rgb image.");
     image::save_buffer(
@@ -84,7 +84,8 @@ pub fn save_rgb_frame(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
     .expect("Couldn't save buffer.");
 }
 
-/// Returns a vector contains the top left cordinate of each instance of the subimage found in the superimage
+/// Returns a vector containing the top left cordinate of each instance of the subimage found in the super image. Matches with rgb8.
+/// Should always find locations of the sub image in the order from left to right then top to bottom in the super image.
 pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Point> {
     let sup_image = sup_image.clone().into_rgb8();
     let sub_image = sub_image.clone().into_rgb8();
@@ -138,6 +139,126 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
     return output;
 }
 
+const CELL_VARIANT_COUNT: usize = 11;
+#[derive(Debug, Copy, Clone, PartialEq)]
+enum Cell {
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Flag,
+    Unexplored,
+    Explored,
+}
+
+/// Holds the information related to the current state of the game.
+#[derive(Debug)]
+pub struct Game {
+    cell_images: Vec<RgbImage>,
+    state: Vec<Cell>,
+    cell_positions: Vec<Point>,
+    px_width: u32,
+    px_height: u32,
+    cell_width: u32,
+    cell_height: u32,
+    top_left: Point,
+    bottom_right: Point,
+}
+
+impl Game {
+    /// Creates a new game struct. Requires the input of the different cell type image file locations in order of CELL enum variants.
+    /// # Panics
+    /// - If the given files are not readable and decodable it panics.
+    /// - If a board is unable to be found it panics.
+    pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], capturer: &mut Capturer) -> Game {
+        // Reads in each cell image.
+        let mut cell_images: Vec<RgbImage> = Vec::with_capacity(CELL_VARIANT_COUNT);
+        for file in cell_files.iter() {
+            cell_images.push(
+                io::Reader::open(file)
+                    .expect(
+                        format!("Cell variant image \"{file}\" was unable to be read.").as_str(),
+                    )
+                    .decode()
+                    .expect(format!("Unsupported Image type for \"{file}\".").as_str())
+                    .to_rgb8(),
+            );
+        }
+
+        // Finds the initial positions of the cells in the game grid.
+        let screenshot = capture_image_frame(capturer);
+        /* save_rgb_vector("screenshot.png", screenshot.to_vec(), screenshot.width(), screenshot.height());
+        save_rgb_vector("cell_at_0.png", cell_images[9].to_vec(), cell_images[9].width(), cell_images[9].height()); */
+        let cell_positions = locate_all(
+            &image::DynamicImage::from(screenshot),
+            &image::DynamicImage::from(cell_images[9].clone()),
+        );
+
+        // If no grid was found then it is not possible to continue.
+        if cell_positions.len() == 0 {
+            panic!("Unable to find board. Unable to continue.");
+        }
+
+        // Initializes state as all unexplored.
+        let state = vec![Cell::Unexplored; cell_positions.len()];
+
+        let top_left = cell_positions[0];
+
+        // Setting the bottom right requires finding hte top left of the last cell and shifting by the cell's width and height to get to the bottom right.
+        let bottom_right = cell_positions
+            .last()
+            .expect("Will only fail if there is no game grid with cells");
+        let offset_from_top_left_corner_to_bottom_right_corner_of_cell = Point(
+            cell_images[9].width() as i32,
+            cell_images[9].height() as i32,
+        );
+        // Update bottom_right by offset to go from top left to bottom right of last cell.
+        let bottom_right =
+            *bottom_right + offset_from_top_left_corner_to_bottom_right_corner_of_cell;
+
+        let mut biggest: i32 = 0; // Temp variable for holding the largest position in the following iterations.
+        let mut cell_width = 0;
+        // Set the width by counting how many cells into cell_positions the highest x value is.
+        // This only works if since the grid is square because this counts the width of the first row.
+        for (i, cell_point) in cell_positions.iter().enumerate() {
+            if cell_point.0 > biggest {
+                biggest = cell_point.0;
+                cell_width = i + 1;
+            }
+        }
+        let mut cell_height = 0;
+        // Set the height by counting how many widths into cell_positions the highest y value is.
+        biggest = 0;
+        for (i, cell_point) in cell_positions.iter().step_by(cell_width).enumerate() {
+            if cell_point.1 > biggest {
+                biggest = cell_point.1;
+                cell_height = i + 1;
+            }
+        }
+
+        // The width in pixels is the number of cells times the width of each cell.
+        let px_width = (cell_width as u32) * cell_images[9].width();
+        // Same for height.
+        let px_height = (cell_height as u32) * cell_images[9].height();
+
+        return Game {
+            cell_images,
+            state,
+            cell_positions,
+            px_width: px_width as u32,
+            px_height: px_height as u32,
+            cell_width: cell_width as u32,
+            cell_height: cell_height as u32,
+            top_left,
+            bottom_right,
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,12 +272,11 @@ mod tests {
         for i in 0..=5 {
             let rgb_vec = capture_rgb_frame(&mut capturer);
             let path = format!("test/IMG{i}.png");
-            save_rgb_frame(&path, rgb_vec, width, height);
+            save_rgb_vector(&path, rgb_vec, width, height);
             // assert_eq!(std::path::Path::new(&path).exists(), true); // Check file now exists.
         }
     }
 
-    use image::io;
     #[test]
     fn test_small_board_sub_image_search() {
         let super_image = io::Reader::open("test_in/subimage_search/sub_board.png")
