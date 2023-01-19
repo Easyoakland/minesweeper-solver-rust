@@ -11,6 +11,9 @@ use std::{
     ops::{Add, Sub},
 };
 
+// TODO replace "as usize" with .try_into().unwrap()
+// TODO change usize operations with checked_sub or checked_add etc..
+
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
 const MAX_COMBINATIONS: u32 = 2000000;
 
@@ -159,23 +162,6 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
             if y + sub_height > sup_height {
                 break 'y_loop;
             }
-            // Generate the cropped image.
-
-            // Following code is used for debugging. It will print the sub image and section of super image being examined.
-            /*image::save_buffer(
-                "sub_sup_image.png",
-                &sub_sup_image,
-                sub_sup_image.width(),
-                sub_sup_image.height(),
-                image::ColorType::Rgb8,
-            ).expect("Can't save sup_sup_image");
-            image::save_buffer(
-                "sub_image.png",
-                &sub_image,
-                sub_image.width(),
-                sub_image.height(),
-                image::ColorType::Rgb8,
-            ).expect("Can't save sup_sup_image"); */
 
             // For each point if it doesn't match skip to next position.
             for (sup_data, sub_data) in sub_sup_image
@@ -234,16 +220,17 @@ pub struct Game {
     cell_images: Vec<RgbImage>,
     state: Vec<CellKind>,
     cell_positions: Vec<Point>,
-    px_width: u32,
-    px_height: u32,
-    cell_width: u32,
-    cell_height: u32,
+    board_px_width: u32,
+    board_px_height: u32,
+    board_cell_width: u32,
+    board_cell_height: u32,
     top_left: Point,
     bottom_right: Point,
     individual_cell_width: u32,
     individual_cell_height: u32,
     board_screenshot: RgbImage,
     capturer: Capturer,
+    frontier: Vec<Cell>,
 }
 
 impl Game {
@@ -329,18 +316,20 @@ impl Game {
             cell_images,
             state,
             cell_positions,
-            px_width: px_width as u32,
-            px_height: px_height as u32,
-            cell_width: cell_width as u32,
-            cell_height: cell_height as u32,
+            board_px_width: px_width as u32,
+            board_px_height: px_height as u32,
+            board_cell_width: cell_width as u32,
+            board_cell_height: cell_height as u32,
             top_left,
             bottom_right,
             individual_cell_width,
             individual_cell_height,
             capturer,
             board_screenshot: screenshot, // Initially not cropped to just board. Will be when it is set using the correct method.
+            frontier: Vec::new(),
         };
     }
+
     pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], id: usize) -> Game {
         let mut capturer = setup_capturer(id);
 
@@ -349,10 +338,24 @@ impl Game {
         return Game::build(cell_files, screenshot, capturer);
     }
 
+    /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
+    fn get_board_screenshot_from_screen(&mut self) {
+        let screenshot = capture_image_frame(&mut self.capturer);
+        self.board_screenshot = image::imageops::crop_imm(
+            &screenshot,
+            self.top_left.0 as u32,
+            self.top_left.1 as u32,
+            self.board_px_width,
+            self.board_px_height,
+        )
+        .to_image();
+    }
+
     fn click(&self, cord: CellCord) {
         let mut enigo = Enigo::new();
+        // Add extra 1 pixel so the click is definitely within the cell instead of maybe on the boundary.
         let x = self.cell_positions[cord.0].0 + 1;
-        let y = self.cell_positions[self.individual_cell_height as usize * cord.1].1 + 1;
+        let y = self.cell_positions[cord.1 * self.board_cell_width as usize].1 + 1;
         enigo.mouse_move_to(x, y);
         enigo.mouse_down(enigo::MouseButton::Left);
         enigo.mouse_up(enigo::MouseButton::Left);
@@ -360,7 +363,7 @@ impl Game {
 
     fn cell_cord_to_offset(&self, cord: CellCord) -> usize {
         let x_offset = cord.0;
-        let y_offset = self.cell_width as usize * (cord.1);
+        let y_offset = self.board_cell_width as usize * (cord.1);
         let total_offset = x_offset + y_offset;
         return total_offset;
     }
@@ -376,34 +379,9 @@ impl Game {
         return self.state[offset];
     }
 
-    /* pub fn reveal (&mut self, cord: CellCord) {
-        self.click(cord);
-        let a = CellKind::Unexplored;
-        let i = 0;
-        while a == CellKind::Unexplored  // This will keep looking for a change until one occurs.
-            {if i >= TIMEOUTS_ATTEMPTS_NUM  // If it must wait this many times give up because something is wrong.
-                {
-                panic!("Board won't update. Game Loss?");}
-            self.get_board_screenshot_from_screen();
-            a = self.identify_cell(CellCord);
-            // If the clicked cell looks like it is an unnumbered and uncovered cell then check that it's neighbors aren't uncovered.
-            // If they are all uncovered then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
-            if a == CellKind::Explored{
-                // make a Cell Object for the clicked cell;
-                let clicked_cell = Cell(CellCord, "complete.png");
-                // iterate through the neighbors of the clicked_cell;
-                    'neighbor_loop: for neighbor in clicked_cell.neighbors(1, self.cell_width, self.cell_height){
-                        if self.identify_cell(neighbor) == CellKind::Unexplored{
-                            // If any neighbors are unexplored then this cell can't be a blank unexplored
-                            a = CellKind::Unexplored;  // set a so while loop will take a new screenshot;
-                            break 'neighbor_loop;}}
-            i += 1;}
-        self.update_state(cord);
-    } */
-
     /// Don't use this. It is only public to do a benchmark.
     pub fn identify_cell_benchmark_pub_func(&self) {
-        self.identify_cell(CellCord(4,3)).unwrap();
+        self.identify_cell(CellCord(4, 3)).unwrap();
     }
 
     fn identify_cell(&self, cord: CellCord) -> Result<CellKind, GameError> {
@@ -412,21 +390,36 @@ impl Game {
         if temp != CellKind::Unexplored {
             return Ok(temp);
         }
+        // This position in the raw screen position. Not the board pixel position.
+        // Because this pixel value is being used for cropping of the board it must be relative to the top left of the board.
         let pos = self.cell_cord_to_pos(cord);
+        // Have to adjust pixel position because the screenshot is not of the whole screen, but rather just the board.
+
+        // Get section of the board that must be identified as a particular cell kind.
+        let sectioned_board_image = imageops::crop_imm(
+            &self.board_screenshot,
+            pos.0 as u32 - self.top_left.0 as u32,
+            pos.1 as u32 - self.top_left.1 as u32,
+            self.individual_cell_width,
+            self.individual_cell_height,
+        );
+
+        let section_of_board = sectioned_board_image.to_image().clone();
+        // image must be dynamic image for exact_image_match function
+        let section_of_board = DynamicImage::from(section_of_board);
+
         // Return the first cell type that matches the tile at the given cordinate.
         for (cell_image, cell_kind) in self.cell_images.iter().zip(all::<CellKind>()) {
-            let sectioned_board_image = imageops::crop_imm(
-                &self.board_screenshot,
-                (pos.0 /* - self.top_left.0 */) as u32,
-                (pos.1 /* - self.top_left.1 */) as u32,
-                self.individual_cell_width,
-                self.individual_cell_height,
-            );
+            // DEBUG
+            // save_image("test/Im2.png", DynamicImage::from(self.board_screenshot.clone()));
+
+            // DEBUG
+            // save_image("test/Im.png", DynamicImage::from(section_of_board.clone()));
 
             // See if it is a match.
             let is_match = exact_image_match(
                 &DynamicImage::from(cell_image.clone()),
-                &DynamicImage::from(sectioned_board_image.to_image().clone()),
+                &section_of_board,
             );
 
             // If it is a match return that match and stop searching.
@@ -444,23 +437,96 @@ impl Game {
         Err(GameError("Can't identify the cell."))
     }
 
-    /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
-    fn get_board_screenshot_from_screen(&mut self) {
-        let screenshot = capture_image_frame(&mut self.capturer);
-        self.board_screenshot = image::imageops::crop_imm(
-            &screenshot,
-            self.top_left.0 as u32,
-            self.top_left.1 as u32,
-            self.px_width,
-            self.px_height,
-        )
-        .to_image();
+    fn state_by_cell_cord(&mut self, cord: CellCord) -> &mut CellKind {
+        let offset = self.cell_cord_to_offset(cord);
+        return &mut self.state[offset];
+    }
+
+    fn update_state(&mut self, cord: CellCord) {
+        // Only unexplored cells can update so don't bother checking if it wasn't an unexplored cell last time it was updated.
+        let cell_state_record = *(self.state_by_cell_cord(cord));
+        if cell_state_record != CellKind::Unexplored {
+            return;
+        }
+
+        // TODO Fix unwrap
+        let cell = Cell {
+            cord,
+            kind: self.identify_cell(cord).unwrap(),
+        };
+        // If cell state is different from recorded for that cell.
+        if cell.kind != cell_state_record {
+            // Then update state record for that cell.
+            *(self.state_by_cell_cord(cell.cord)) = cell.kind;
+            // If the cell is fully explored then check it's neighbors because it is not part of the frontier and neighbors may have also updated.
+            if cell.kind == CellKind::Explored {
+                // Update state of its neighbors.
+                for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
+                    self.update_state(neighbor)
+                }
+            }
+            // If it is a number and not a fully explored cell.
+            else if matches!(
+                cell.kind,
+                CellKind::One
+                    | CellKind::Two
+                    | CellKind::Three
+                    | CellKind::Four
+                    | CellKind::Five
+                    | CellKind::Six
+                    | CellKind::Seven
+                    | CellKind::Eight
+            ) {
+                // Add cell to frontier
+                self.frontier.push(cell)
+            }
+        }
+    }
+
+    pub fn reveal(&mut self, cord: CellCord) {
+        self.click(cord);
+        let mut temp_cell_kind = CellKind::Unexplored;
+        let mut i = 0;
+        while temp_cell_kind == CellKind::Unexplored
+        // This will keep looking for a change until one occurs.
+        {
+            if i >= TIMEOUTS_ATTEMPTS_NUM
+            // If it must wait this many times give up because something is wrong.
+            {
+                panic!("Board won't update. Game Loss?");
+            }
+            self.get_board_screenshot_from_screen();
+            // TODO replace below unwrap with handling errors by saving the unknown image and quitting.
+            temp_cell_kind = self.identify_cell(cord).unwrap();
+            // If the clicked cell looks like it is an unnumbered and explored cell then check that it's neighbors aren't unexplored.
+            // If they are any are unexplored then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
+            if temp_cell_kind == CellKind::Explored {
+                // Make a Cell Object for the clicked cell.
+                let clicked_cell = Cell {
+                    cord,
+                    kind: CellKind::Explored,
+                };
+                // Iterate through the neighbors of the clicked cell.
+                'neighbor_loop: for neighbor in
+                    clicked_cell.neighbors(1, self.board_cell_width, self.board_cell_height)
+                {
+                    // TODO replace unwrap with handling of error by saving unknown image.
+                    if self.identify_cell(neighbor).unwrap() == CellKind::Unexplored {
+                        // If any neighbors are unexplored then this cell can't be a blank explored
+                        temp_cell_kind = CellKind::Unexplored; // set a so while loop will take a new screenshot;
+                        break 'neighbor_loop;
+                    }
+                }
+                i += 1;
+            }
+        }
+        self.update_state(cord);
     }
 
     pub fn solve(&mut self) {
         // Reveal initial tile.
-        let center = (self.cell_width / 2, self.cell_height / 2);
-        // game.reveal(center);
+        let center = CellCord((self.board_cell_width / 2) as usize, (self.board_cell_height / 2) as usize);
+        self.reveal(center);
     }
 
     /// Saves information about this Game to file for potential debugging purposes.
@@ -468,28 +534,34 @@ impl Game {
         // save saved game state as picture
         // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
 
-        // save game state as csv
-        // clear file contents
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open("test/FinalGameState.csv")
-            .unwrap();
-        if let Err(e) = write!(file, "") {
-            eprintln!("Couldn't write to file: {}", e);
-        }
+        // Save game state as csv.
+        // Write create truncate can be set with `let log_file = File::create(&log_file_name).unwrap();` or as below.
         // Write state to file after formatting nicely.
         let mut file = OpenOptions::new()
             .write(true)
-            .append(true)
+            .create(true)
+            .truncate(true)
             .open("test/FinalGameState.csv")
             .unwrap();
 
         for (i, cell) in self.state.iter().enumerate() {
-            if let Err(e) = write!(file, "{cell:?}, ") {
+            let symbol_to_write = match cell {
+                CellKind::One => '1',
+                CellKind::Two => '2',
+                CellKind::Three => '3',
+                CellKind::Four => '4',
+                CellKind::Five => '5',
+                CellKind::Six => '6',
+                CellKind::Seven => '7',
+                CellKind::Eight => '8',
+                CellKind::Flag => 'F',
+                CellKind::Unexplored => 'U',
+                CellKind::Explored => 'E',
+            };
+            if let Err(e) = write!(file, "{symbol_to_write} ") {
                 eprintln!("Couldn't write to file: {}", e);
             }
-            if (i + 1) % self.cell_width as usize == 0 {
+            if (i + 1) % self.board_cell_width as usize == 0 {
                 if let Err(e) = write!(file, "\n") {
                     eprintln!("Couldn't write to file: {}", e);
                 }
@@ -506,7 +578,59 @@ pub fn read_image(path: &str) -> DynamicImage {
 }
 
 pub fn save_image(path: &str, image: DynamicImage) {
-    save_rgb_vector(path, image.clone().into_rgb8().to_vec(), image.width(), image.height());
+    save_rgb_vector(
+        path,
+        image.clone().into_rgb8().to_vec(),
+        image.width(),
+        image.height(),
+    );
+}
+
+struct Cell {
+    cord: CellCord,
+    kind: CellKind,
+}
+
+impl Cell {
+    // Returns cords of all neighbors that exist.
+    fn neighbors(
+        &self,
+        radius: usize,
+        board_cell_width: u32,
+        board_cell_height: u32,
+    ) -> Vec<CellCord> {
+        let mut neighbors = Vec::new();
+        // Goes from left to right and from top to bottom generating neighbor cords.
+        // Each radius increases number of cells in each dimension by 2 starting with 1 cell at radius = 0
+        for j in 0..2 * radius + 1 {
+            for i in 0..2 * radius + 1 {
+                // TODO check that usize doesn't overflow here for negative cords.
+                let x: i64 = self.cord.0 as i64 - radius as i64 + i as i64;
+                let y: i64 = self.cord.1 as i64 - radius as i64 + j as i64;
+                // Don't make neighbors with negative cords.
+                if x < 0 || y < 0 {
+                    continue;
+                }
+                // If neither is negative can safely convert to unsigned.
+                let x = x as usize;
+                let y = y as usize;
+
+                // Don't make neighbors with cords beyond the bounds of the board.
+                if x > board_cell_width as usize - 1 || y > board_cell_height as usize - 1 {
+                    continue;
+                }
+
+                // Don't add self to neighbor list.
+                if x == self.cord.0 && y == self.cord.1 {
+                    continue;
+                }
+
+                neighbors.push(CellCord(x, y));
+            }
+        }
+
+        return neighbors;
+    }
 }
 
 #[cfg(test)]
@@ -548,6 +672,7 @@ mod tests {
     }
 
     /// This test requires manual confirmation.
+    /// This test requires manually opening a copy of the game first.
     #[ignore]
     #[test]
     fn open_game_first_click_1_1() {
@@ -569,6 +694,36 @@ mod tests {
         );
 
         game.click(CellCord(1, 1));
+    }
+
+    /// This test requires manually opening a copy of the game first.
+    /// This test requires partial manual confirmation.
+    #[ignore]
+    #[test]
+    fn open_game_first_reveal() {
+        let mut game = Game::new(
+            [
+                "cell_images/1.png",
+                "cell_images/2.png",
+                "cell_images/3.png",
+                "cell_images/4.png",
+                "cell_images/5.png",
+                "cell_images/6.png",
+                "cell_images/7.png",
+                "cell_images/8.png",
+                "cell_images/flag.png",
+                "cell_images/cell.png",
+                "cell_images/complete.png",
+            ],
+            0,
+        );
+        let place_to_click = CellCord(7, 7);
+        game.get_board_screenshot_from_screen();
+        game.reveal(place_to_click);
+
+        game.save_state_info();
+        // First move always gives a fully unexplored cell.
+        assert_eq!(game.state_at_cord(place_to_click), CellKind::Explored);
     }
 
     /// This test requires manual confirmation.
@@ -620,7 +775,13 @@ mod tests {
             setup_capturer(0),
         );
 
-        assert_eq!(game.identify_cell(CellCord(3,3)).unwrap(), CellKind::Unexplored);
-        assert_eq!(game.identify_cell(CellCord(9,9)).unwrap(), CellKind::Unexplored);
+        assert_eq!(
+            game.identify_cell(CellCord(3, 3)).unwrap(),
+            CellKind::Unexplored
+        );
+        assert_eq!(
+            game.identify_cell(CellCord(9, 9)).unwrap(),
+            CellKind::Unexplored
+        );
     }
 }

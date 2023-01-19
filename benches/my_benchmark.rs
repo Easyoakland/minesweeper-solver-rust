@@ -61,7 +61,7 @@ fn test_identify_cell_benchmark(c: &mut Criterion) {
         setup_capturer(0),
     );
     c.bench_function("identify cell on unexplored", |b| {
-        b.iter(|| black_box(game.identify_cell_benchmark_pub_func()))
+        b.iter(|| Game::identify_cell_benchmark_pub_func(black_box(&game)))
     });
 }
 
