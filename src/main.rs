@@ -1,7 +1,7 @@
 use minesweeper_solver_in_rust::Game;
 
 fn main(){
-    let game = Game::new(
+    let mut game = Game::new(
         [
             "cell_images/1.png",
             "cell_images/2.png",
@@ -18,7 +18,6 @@ fn main(){
         0,
     );
 
-    let center = (game.cell_width/2, game.cell_height/2);
-    // game.reveal(center);
-    game.exit(false);
+    game.solve();
+    game.save_state_info();
 }

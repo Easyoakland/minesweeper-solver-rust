@@ -1,9 +1,12 @@
 use captrs::{Bgr8, Capturer};
-use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer, */ Rgb, RgbImage};
+use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer,  Rgb,*/ RgbImage};
 /* use imageproc::rgb_image; */
 use enigo::{Enigo, MouseControllable};
+use enum_iterator::{all, Sequence};
 use std::io::prelude::*;
 use std::{
+    error::Error,
+    fmt,
     fs::OpenOptions,
     ops::{Add, Sub},
 };
@@ -48,6 +51,24 @@ impl Sub for CellCord {
         Self(self.0 - other.0, self.1 - other.1)
     }
 }
+
+#[derive(Debug)]
+struct GameError(&'static str);
+
+/// Error that indicates something went wrong while trying to solve the game.
+impl Error for GameError {}
+
+impl fmt::Display for GameError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/* impl fmt::Debug for GameError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{{ file: {}, line: {} }}", file!(), line!())
+    }
+} */
 
 /// Returns a capturer instance. Selects monitor based upon passed id. Zero indexed.
 pub fn setup_capturer(id: usize) -> Capturer {
@@ -114,7 +135,7 @@ pub fn save_rgb_vector(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
 /// Returns a vector containing the top left cordinate of each instance of the subimage found in the super image. Matches with rgb8.
 /// Should always find locations of the sub image in the order from left to right then top to bottom in the super image.
 pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Point> {
-    let sup_image = sup_image.clone().into_rgb8(); // `.clone().into_rgb8()` is 13% faster on benchmark then `.to_rgb8()`.
+    let sup_image = sup_image.clone().into_rgb8(); // `.clone().into_rgb8()` is 13% faster on benchmark then `.to_rgb8()`. As approx as fast.as_rgb.unwrap() (maybe 1% faster) but can use all of RgbImage methods this way.
     let sub_image = sub_image.clone().into_rgb8();
     let mut output = Vec::new();
 
@@ -123,8 +144,13 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
     let (sub_width, sub_height) = (sub_image.width(), sub_image.height());
 
     // Iterate through all positions of the sup_image checking if that region matches the sub_image when cropped to size.
+    let mut sub_sup_image = imageops::crop_imm(&sup_image, 0, 0, sub_width, sub_height);
     'y_loop: for y in 0..sup_height {
         'x_loop: for x in 0..sup_width {
+            // Move sub image instead of creating a new one each iteration.
+            // Approx 10% faster than using `let mut sub_sup_image = imageops::crop_imm(&sup_image, x, y, sub_width, sub_height);` each line
+            sub_sup_image.change_bounds(x, y, sub_width, sub_height);
+
             // Skip to next y line if no space left on this row for a sub image to fit.
             if x + sub_width > sup_width {
                 continue 'y_loop;
@@ -134,7 +160,6 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
                 break 'y_loop;
             }
             // Generate the cropped image.
-            let sub_sup_image = imageops::crop_imm(&sup_image, x, y, sub_width, sub_height);
 
             // Following code is used for debugging. It will print the sub image and section of super image being examined.
             /*image::save_buffer(
@@ -169,8 +194,27 @@ pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Poi
     return output;
 }
 
+fn exact_image_match(image1: &DynamicImage, image2: &DynamicImage) -> bool {
+    // If the images don't have the same dimensions then they can't be an exact match.
+    if image1.width() != image2.width() {
+        return false;
+    } else if image1.height() != image2.height() {
+        return false;
+    };
+
+    // If they are the same dimension then locating all of either in the other will give one result if they are the same and 0 if different.
+    let matches = locate_all(image1, image2);
+    if matches.len() == 0 {
+        return false;
+    } else if matches.len() == 1 {
+        return true;
+    } else {
+        panic!("Somehow one image exists multiple times in another image of the same size. Something is wrong.")
+    }
+}
+
 const CELL_VARIANT_COUNT: usize = 11;
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Sequence)]
 enum CellKind {
     One,
     Two,
@@ -192,8 +236,8 @@ pub struct Game {
     cell_positions: Vec<Point>,
     px_width: u32,
     px_height: u32,
-    pub cell_width: u32,
-    pub cell_height: u32,
+    cell_width: u32,
+    cell_height: u32,
     top_left: Point,
     bottom_right: Point,
     individual_cell_width: u32,
@@ -207,7 +251,11 @@ impl Game {
     /// # Panics
     /// - If the given files are not readable and decodable it panics.
     /// - If a board is unable to be found it panics.
-    pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], id: usize) -> Game {
+    pub fn build(
+        cell_files: [&str; CELL_VARIANT_COUNT],
+        screenshot: RgbImage,
+        capturer: Capturer,
+    ) -> Game {
         // Reads in each cell image.
         let mut cell_images: Vec<RgbImage> = Vec::with_capacity(CELL_VARIANT_COUNT);
         for file in cell_files.iter() {
@@ -222,10 +270,6 @@ impl Game {
             );
         }
 
-        let mut capturer = setup_capturer(id);
-
-        // Finds the initial positions of the cells in the game grid.
-        let screenshot = capture_image_frame(&mut capturer);
         /* save_rgb_vector("screenshot.png", screenshot.to_vec(), screenshot.width(), screenshot.height());
         save_rgb_vector("cell_at_0.png", cell_images[9].to_vec(), cell_images[9].width(), cell_images[9].height()); */
         let cell_positions = locate_all(
@@ -294,8 +338,15 @@ impl Game {
             individual_cell_width,
             individual_cell_height,
             capturer,
-            board_screenshot: screenshot,
+            board_screenshot: screenshot, // Initially not cropped to just board. Will be when it is set using the correct method.
         };
+    }
+    pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], id: usize) -> Game {
+        let mut capturer = setup_capturer(id);
+
+        // Finds the initial positions of the cells in the game grid.
+        let screenshot = capture_image_frame(&mut capturer);
+        return Game::build(cell_files, screenshot, capturer);
     }
 
     fn click(&self, cord: CellCord) {
@@ -307,6 +358,24 @@ impl Game {
         enigo.mouse_up(enigo::MouseButton::Left);
     }
 
+    fn cell_cord_to_offset(&self, cord: CellCord) -> usize {
+        let x_offset = cord.0;
+        let y_offset = self.cell_width as usize * (cord.1);
+        let total_offset = x_offset + y_offset;
+        return total_offset;
+    }
+
+    // Convert cell based cordinate to actual pixel position.
+    fn cell_cord_to_pos(&self, cord: CellCord) -> Point {
+        let offset = self.cell_cord_to_offset(cord);
+        return self.cell_positions[offset];
+    }
+
+    fn state_at_cord(&self, cord: CellCord) -> CellKind {
+        let offset = self.cell_cord_to_offset(cord);
+        return self.state[offset];
+    }
+
     /* pub fn reveal (&mut self, cord: CellCord) {
         self.click(cord);
         let a = CellKind::Unexplored;
@@ -315,7 +384,7 @@ impl Game {
             {if i >= TIMEOUTS_ATTEMPTS_NUM  // If it must wait this many times give up because something is wrong.
                 {
                 panic!("Board won't update. Game Loss?");}
-            self.set_board_screenshot();
+            self.get_board_screenshot_from_screen();
             a = self.identify_cell(CellCord);
             // If the clicked cell looks like it is an unnumbered and uncovered cell then check that it's neighbors aren't uncovered.
             // If they are all uncovered then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
@@ -332,28 +401,51 @@ impl Game {
         self.update_state(cord);
     } */
 
-    /*         fn identify_cell(&self, cord: CellCord) {
+    /// Don't use this. It is only public to do a benchmark.
+    pub fn identify_cell_benchmark_pub_func(&self) {
+        self.identify_cell(CellCord(4,3)).unwrap();
+    }
+
+    fn identify_cell(&self, cord: CellCord) -> Result<CellKind, GameError> {
         // Only unchecked cells can update so don't bother checking if it wasn't an unchecked cell last time it was updated.
-        let temp = self.recall_CellKind(cord);
-        if temp != CellKind::Unexplored{
-            return temp;}
-        let pos = self.convert_CellCord_to_pos(cord);
-        // return the first tiletype that matches the tile at the given cordinate
-        for (i, cellTypeIm) in self.cellTypeIms.iters().enumerate() {
-            // this works by computing the pixel by pixel difference between the image on the board and a reference image.
-            dif = ImageChops.difference(cellTypeIm, self.boardIm.crop(
-                (pos[0]-self._origin[0], pos[1]-self._origin[1], pos[0]-self._origin[0]+self._cellwidth, pos[1]-self._origin[1]+self._cellheight)))
-            // if the sum difference of every pixel is zero then they are the same image
-            if sum(sum(sum(np.asarray(dif)))) == 0{
-                temp = self.cellTypes[i];
-                return temp;}}
-        println!("UNIDENTIFIED CELL at cord: " + str(cord));
+        let mut temp: CellKind = self.state_at_cord(cord);
+        if temp != CellKind::Unexplored {
+            return Ok(temp);
+        }
+        let pos = self.cell_cord_to_pos(cord);
+        // Return the first cell type that matches the tile at the given cordinate.
+        for (cell_image, cell_kind) in self.cell_images.iter().zip(all::<CellKind>()) {
+            let sectioned_board_image = imageops::crop_imm(
+                &self.board_screenshot,
+                (pos.0 /* - self.top_left.0 */) as u32,
+                (pos.1 /* - self.top_left.1 */) as u32,
+                self.individual_cell_width,
+                self.individual_cell_height,
+            );
+
+            // See if it is a match.
+            let is_match = exact_image_match(
+                &DynamicImage::from(cell_image.clone()),
+                &DynamicImage::from(sectioned_board_image.to_image().clone()),
+            );
+
+            // If it is a match return that match and stop searching.
+            if is_match {
+                temp = cell_kind;
+                return Ok(temp);
+            }
+        }
+
+        // If all cell images were matched and none worked.
+        println!("UNIDENTIFIED CELL at cord: {:#?}", cord);
 
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
-        exiting(self)
-    } */
+        self.save_state_info();
+        Err(GameError("Can't identify the cell."))
+    }
 
-    fn set_board_screenshot(&mut self) {
+    /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
+    fn get_board_screenshot_from_screen(&mut self) {
         let screenshot = capture_image_frame(&mut self.capturer);
         self.board_screenshot = image::imageops::crop_imm(
             &screenshot,
@@ -365,8 +457,14 @@ impl Game {
         .to_image();
     }
 
-    /// Saves information about this Game to file for potential debugging purposes. If panic = true then it panics after doing so.
-    pub fn exit(&self, panic: bool) {
+    pub fn solve(&mut self) {
+        // Reveal initial tile.
+        let center = (self.cell_width / 2, self.cell_height / 2);
+        // game.reveal(center);
+    }
+
+    /// Saves information about this Game to file for potential debugging purposes.
+    pub fn save_state_info(&self) {
         // save saved game state as picture
         // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
 
@@ -397,10 +495,18 @@ impl Game {
                 }
             }
         }
-        if panic == true {
-            panic!("Exit functions was told to panic.");
-        }
     }
+}
+
+pub fn read_image(path: &str) -> DynamicImage {
+    return io::Reader::open(path)
+        .expect("Couldn't read image.")
+        .decode()
+        .expect("Unsupported Type");
+}
+
+pub fn save_image(path: &str, image: DynamicImage) {
+    save_rgb_vector(path, image.clone().into_rgb8().to_vec(), image.width(), image.height());
 }
 
 #[cfg(test)]
@@ -423,14 +529,8 @@ mod tests {
 
     #[test]
     fn test_small_board_sub_image_search() {
-        let super_image = io::Reader::open("test_in/subimage_search/sub_board.png")
-            .expect("Couldn't read super image.")
-            .decode()
-            .expect("Unsupported Type");
-        let sub_image = io::Reader::open("test_in/subimage_search/cell.png")
-            .expect("Couldn't read sub image")
-            .decode()
-            .expect("Unsupported Type");
+        let super_image = read_image("test_in/subimage_search/sub_board.png");
+        let sub_image = read_image("test_in/subimage_search/cell.png");
         let all_positions = locate_all(&super_image, &sub_image);
         assert!(all_positions.iter().any(|point| *point == Point(10, 48)));
         assert!(all_positions.iter().any(|point| *point == Point(26, 48)));
@@ -439,14 +539,8 @@ mod tests {
 
     #[test]
     fn test_board_sub_image_search() {
-        let super_image = io::Reader::open("test_in/subimage_search/board.png")
-            .expect("Couldn't read super image.")
-            .decode()
-            .expect("Unsupported Type");
-        let sub_image = io::Reader::open("test_in/subimage_search/cell.png")
-            .expect("Couldn't read sub image")
-            .decode()
-            .expect("Unsupported Type");
+        let super_image = read_image("test_in/subimage_search/board.png");
+        let sub_image = read_image("test_in/subimage_search/cell.png");
         let all_positions = locate_all(&super_image, &sub_image);
         assert!(all_positions.iter().any(|point| *point == Point(10, 48)));
         assert!(all_positions.iter().any(|point| *point == Point(26, 48)));
@@ -456,7 +550,7 @@ mod tests {
     /// This test requires manual confirmation.
     #[ignore]
     #[test]
-    fn click_1_1() {
+    fn open_game_first_click_1_1() {
         let game = Game::new(
             [
                 "cell_images/1.png",
@@ -480,7 +574,7 @@ mod tests {
     /// This test requires manual confirmation.
     #[ignore]
     #[test]
-    fn set_board_screenshot_test() {
+    fn manual_check_get_board_screenshot_from_screen_test() {
         let mut game = Game::new(
             [
                 "cell_images/1.png",
@@ -497,12 +591,36 @@ mod tests {
             ],
             0,
         );
-        game.set_board_screenshot();
+        game.get_board_screenshot_from_screen();
         save_rgb_vector(
             "board_screenshot_test.png",
             game.board_screenshot.to_vec(),
             game.board_screenshot.width(),
             game.board_screenshot.height(),
         );
+    }
+
+    #[test]
+    fn identify_cell_test() {
+        let game = Game::build(
+            [
+                "cell_images/1.png",
+                "cell_images/2.png",
+                "cell_images/3.png",
+                "cell_images/4.png",
+                "cell_images/5.png",
+                "cell_images/6.png",
+                "cell_images/7.png",
+                "cell_images/8.png",
+                "cell_images/flag.png",
+                "cell_images/cell.png",
+                "cell_images/complete.png",
+            ],
+            read_image("test_in/subimage_search/board.png").to_rgb8(),
+            setup_capturer(0),
+        );
+
+        assert_eq!(game.identify_cell(CellCord(3,3)).unwrap(), CellKind::Unexplored);
+        assert_eq!(game.identify_cell(CellCord(9,9)).unwrap(), CellKind::Unexplored);
     }
 }
