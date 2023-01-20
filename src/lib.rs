@@ -3,6 +3,8 @@ use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer,  Rgb,*
 /* use imageproc::rgb_image; */
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
+use imageproc::drawing::Canvas;
+use std::collections::HashSet;
 use std::io::prelude::*;
 use std::{
     error::Error,
@@ -84,7 +86,8 @@ fn capture_rgb_frame(capturer: &mut Capturer) -> Vec<u8> {
         let temp = capturer.capture_frame();
         match temp {
             Ok(frame) => {
-                let mut rgb_vec = Vec::new();
+                // The capacity of rgb_vec should be the 3 (rgb) for each rgba pixel
+                let mut rgb_vec = Vec::with_capacity(3 * (frame.capacity() / 4));
                 for Bgr8 {
                     r,
                     g,
@@ -111,6 +114,40 @@ fn capture_rgb_frame(capturer: &mut Capturer) -> Vec<u8> {
     }
 }
 
+/* /// Returns a vector of concatenated RGB values corresponding to a captured frame.
+/// Works on a given vector so allocation of that vector can be done once for the program.
+fn capture_rgb_frame_in_place(capturer: &mut Capturer, rgb_vec: &mut Vec<u8>) {
+    loop {
+        let temp = capturer.capture_frame();
+        match temp {
+            Ok(frame) => {
+                // Clear the vector for allocation.
+                rgb_vec.clear();
+                for Bgr8 {
+                    r,
+                    g,
+                    b, /* a */
+                    ..
+                } in frame.into_iter()
+                {
+                    rgb_vec.push(r);
+                    rgb_vec.push(g);
+                    rgb_vec.push(b);
+                    /* rgb_vec.push(a); */
+                }
+
+                // Make sure the image is not a failed black screen.
+                if !rgb_vec.iter().any(|&x| x != 0) {
+                    // thread::sleep(Duration::new(0, 1)); // sleep 1ms
+                    // println!("All black");
+                    continue;
+                };
+            }
+            Err(_) => continue,
+        }
+    }
+} */
+
 /// Captures and returns a screenshot as RgbImage.
 pub fn capture_image_frame(capturer: &mut Capturer) -> RgbImage {
     return RgbImage::from_raw(
@@ -120,6 +157,11 @@ pub fn capture_image_frame(capturer: &mut Capturer) -> RgbImage {
     )
     .expect("Frame was unable to be captured and converted to RGB.");
 }
+
+/* /// Captures and returns a screenshot as RgbImage.
+pub fn capture_image_frame_in_place(capturer: &mut Capturer, rgb_vec: &mut Vec<u8>) {
+    capture_rgb_frame_in_place(capturer, rgb_vec);
+} */
 
 /// Saves an RGB image vector to a the given path.
 pub fn save_rgb_vector(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
@@ -199,6 +241,36 @@ fn exact_image_match(image1: &DynamicImage, image2: &DynamicImage) -> bool {
     }
 }
 
+// Takes a vector of CellGroup and separates any subsets from supersets.
+fn remove_complete_cell_group_overlaps(
+    mut cell_group_vec: Vec<CellGroup>,
+) -> (bool, Vec<CellGroup>) {
+    let mut did_something = false;
+    for i in 0..cell_group_vec.len() {
+        // Temporary set to see if it is a subset.
+        let set1 = cell_group_vec[i].offsets.clone();
+        for j in 0..cell_group_vec.len() {
+            // Temporary set to see if it is a superset.
+            let set2 = &mut cell_group_vec[j].offsets;
+            // If it is a different set and it is a subset.
+            if (i != j) && set1.is_subset(&set2) {
+                // Remove items that are shared from the superset.
+                // Below code should be equivalent to next line. Not using next line because it is an unstable library feature.
+                // let set2: HashSet<usize> = set2.drain_filter(|elem| set1.contains(elem)).collect();
+                let set3: HashSet<usize> = set2.difference(&set1).map(|x| *x).collect();
+                *set2 = set3;
+
+                did_something = true;
+
+                // Decrease the bomb count of the superset by the subset's bombcount.
+                cell_group_vec[j].bomb_num =
+                    cell_group_vec[j].bomb_num - cell_group_vec[i].bomb_num;
+            }
+        }
+    }
+    return (did_something, cell_group_vec);
+}
+
 const CELL_VARIANT_COUNT: usize = 11;
 #[derive(Debug, Copy, Clone, PartialEq, Sequence)]
 enum CellKind {
@@ -213,6 +285,29 @@ enum CellKind {
     Flag,
     Unexplored,
     Explored,
+}
+
+impl CellKind {
+    /// Returns a number corresponding to the type of cell.
+    /// # Examples
+    /// `assert_eq!(CellKind::One.value(), 1);`
+    ///
+    /// `assert_eq!(CellKind::Eight.value(), 8);`
+    fn value(&self) -> Option<u32> {
+        return match *self {
+            CellKind::One => Some(1),
+            CellKind::Two => Some(2),
+            CellKind::Three => Some(3),
+            CellKind::Four => Some(4),
+            CellKind::Five => Some(5),
+            CellKind::Six => Some(6),
+            CellKind::Seven => Some(7),
+            CellKind::Eight => Some(8),
+            CellKind::Flag => None,
+            CellKind::Unexplored => None,
+            CellKind::Explored => None,
+        };
+    }
 }
 
 /// Holds the information related to the current state of the game.
@@ -231,6 +326,8 @@ pub struct Game {
     board_screenshot: RgbImage,
     capturer: Capturer,
     frontier: Vec<Cell>,
+    cell_groups: Vec<CellGroup>,
+    /* board_screenshot_vec: Vec<u8>, */
 }
 
 impl Game {
@@ -327,6 +424,8 @@ impl Game {
             capturer,
             board_screenshot: screenshot, // Initially not cropped to just board. Will be when it is set using the correct method.
             frontier: Vec::new(),
+            cell_groups: Vec::new(),
+            /* board_screenshot_vec: Vec::with_capacity((screenshot.width()*screenshot.height()) as usize) */
         };
     }
 
@@ -351,7 +450,23 @@ impl Game {
         .to_image();
     }
 
-    fn click(&self, cord: CellCord) {
+    /*     /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
+    fn get_board_screenshot_from_screen_in_place(&mut self) {
+        capture_image_frame_in_place(&mut self.capturer, &mut self.board_screenshot_vec);
+        let (width,height) = self.capturer.geometry();
+        let screenshot = RgbImage::from_vec(width, height, self.board_screenshot_vec).expect("Failed to convert vector to RGBImage");
+        self.board_screenshot = image::imageops::crop_imm(
+            &screenshot,
+            self.top_left.0 as u32,
+            self.top_left.1 as u32,
+            self.board_px_width,
+            self.board_px_height,
+        )
+        .to_image();
+    } */
+
+    /// Left clicks indicated cord
+    fn click_left_cell_cord(&self, cord: CellCord) {
         let mut enigo = Enigo::new();
         // Add extra 1 pixel so the click is definitely within the cell instead of maybe on the boundary.
         let x = self.cell_positions[cord.0].0 + 1;
@@ -361,11 +476,35 @@ impl Game {
         enigo.mouse_up(enigo::MouseButton::Left);
     }
 
+    /// Right click indicated cord
+    fn click_right_cell_cord(&self, cord: CellCord) {
+        let mut enigo = Enigo::new();
+        // Add extra 1 pixel so the click is definitely within the cell instead of maybe on the boundary.
+        let x = self.cell_positions[cord.0].0 + 1;
+        let y = self.cell_positions[cord.1 * self.board_cell_width as usize].1 + 1;
+        enigo.mouse_move_to(x, y);
+        enigo.mouse_down(enigo::MouseButton::Right);
+        enigo.mouse_up(enigo::MouseButton::Right);
+    }
+
     fn cell_cord_to_offset(&self, cord: CellCord) -> usize {
         let x_offset = cord.0;
         let y_offset = self.board_cell_width as usize * (cord.1);
         let total_offset = x_offset + y_offset;
         return total_offset;
+    }
+
+    fn offset_to_cell_cord(&self, mut offset: usize) -> CellCord {
+        let mut cnt = 0;
+        while offset >= self.board_cell_width as usize {
+            offset = offset - self.board_cell_width as usize;
+            cnt += 1
+        }
+        let y = cnt;
+        let x = offset;
+        // y = int(Offset/self._width)
+        // x = int(Offset-y*self._width)
+        return CellCord(x, y);
     }
 
     // Convert cell based cordinate to actual pixel position.
@@ -374,27 +513,32 @@ impl Game {
         return self.cell_positions[offset];
     }
 
-    fn state_at_cord(&self, cord: CellCord) -> CellKind {
+    fn state_at_cord(&mut self, cord: CellCord) -> &mut CellKind {
         let offset = self.cell_cord_to_offset(cord);
-        return self.state[offset];
+        return &mut self.state[offset];
+    }
+
+    fn state_at_cord_imm(&self, cord: CellCord) -> &CellKind {
+        let offset = self.cell_cord_to_offset(cord);
+        return &self.state[offset];
     }
 
     /// Don't use this. It is only public to do a benchmark.
-    pub fn identify_cell_benchmark_pub_func(&self) {
+    pub fn identify_cell_benchmark_pub_func(&mut self) {
         self.identify_cell(CellCord(4, 3)).unwrap();
     }
 
-    fn identify_cell(&self, cord: CellCord) -> Result<CellKind, GameError> {
+    fn identify_cell(&mut self, cord: CellCord) -> Result<CellKind, GameError> {
         // Only unchecked cells can update so don't bother checking if it wasn't an unchecked cell last time it was updated.
-        let mut temp: CellKind = self.state_at_cord(cord);
+        let mut temp: CellKind = *self.state_at_cord(cord);
         if temp != CellKind::Unexplored {
             return Ok(temp);
         }
         // This position in the raw screen position. Not the board pixel position.
         // Because this pixel value is being used for cropping of the board it must be relative to the top left of the board.
         let pos = self.cell_cord_to_pos(cord);
-        // Have to adjust pixel position because the screenshot is not of the whole screen, but rather just the board.
 
+        // Have to adjust pixel position because the screenshot is not of the whole screen, but rather just the board.
         // Get section of the board that must be identified as a particular cell kind.
         let sectioned_board_image = imageops::crop_imm(
             &self.board_screenshot,
@@ -417,10 +561,8 @@ impl Game {
             // save_image("test/Im.png", DynamicImage::from(section_of_board.clone()));
 
             // See if it is a match.
-            let is_match = exact_image_match(
-                &DynamicImage::from(cell_image.clone()),
-                &section_of_board,
-            );
+            let is_match =
+                exact_image_match(&DynamicImage::from(cell_image.clone()), &section_of_board);
 
             // If it is a match return that match and stop searching.
             if is_match {
@@ -431,7 +573,7 @@ impl Game {
 
         // If all cell images were matched and none worked.
         println!("UNIDENTIFIED CELL at cord: {:#?}", cord);
-
+        save_image("cell_images/Unidentified.png", section_of_board);
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
         self.save_state_info();
         Err(GameError("Can't identify the cell."))
@@ -484,7 +626,7 @@ impl Game {
     }
 
     pub fn reveal(&mut self, cord: CellCord) {
-        self.click(cord);
+        self.click_left_cell_cord(cord);
         let mut temp_cell_kind = CellKind::Unexplored;
         let mut i = 0;
         while temp_cell_kind == CellKind::Unexplored
@@ -523,10 +665,241 @@ impl Game {
         self.update_state(cord);
     }
 
-    pub fn solve(&mut self) {
+    /// Flag cell at cord then update cell state at location to flag.
+    fn flag(&mut self, cord: CellCord) {
+        // Don't do anything if the cell isn't flaggable.
+        if *self.state_at_cord_imm(cord) != CellKind::Unexplored {
+            println!("Tried flagging a non flaggable at: {:#?}", cord);
+            return;
+        }
+        // Since the cell is flaggable flag it...
+        self.click_right_cell_cord(cord);
+        // ...and update the internal state of that cell to match.
+        *self.state_at_cord(cord) = CellKind::Flag;
+        return;
+    }
+
+    /// Rule 1 implemented with sets. If the amount of bombs in a set is the same as the amount of cells in a set, they are all bombs.
+    /// Returns a bool indicating whether the rule did something.
+    fn cell_group_rule_1(&mut self, cell_group: &CellGroup) -> bool {
+        // DEBUG
+        self.save_state_info();
+
+        // If the number of bombs in the set is the same as the size of the set.
+        if cell_group.bomb_num as usize == cell_group.offsets.len() {
+            // Flag all cells in set.
+            for offset in cell_group.offsets.iter() {
+                self.flag(self.offset_to_cell_cord(*offset))
+            }
+            // Rule activated.
+            return true;
+        } else {
+            // Rule didn't activate.
+            return false;
+        }
+    }
+
+    fn cell_group_rule_2(&mut self, cell_group: &CellGroup) -> bool {
+        // If set of cells has no bomb.
+        if cell_group.bomb_num == 0 {
+            // DEBUG
+            self.save_state_info_with_path("test/before.csv");
+
+            // TODO somehow the below for loop is when the state updates.
+            // Reveal all cells in the set.
+            for offset in cell_group.offsets.iter() {
+                // DEBUG
+                self.save_state_info_with_path("test/after.csv");
+
+                // DEBUG if statement
+                if self.state[*offset] != CellKind::Unexplored {
+                    println!("Skipping trying to reveal something already revealed. It is at {:#?} and is a {:#?}", self.offset_to_cell_cord(*offset), self.state[*offset]);
+                    for offset in cell_group.offsets.iter() {
+                        println!(
+                            "Part of cell_group containing offset {offset:#?} and cord {:#?}",
+                            self.offset_to_cell_cord(*offset)
+                        )
+                    }
+                } else {
+                    self.reveal(self.offset_to_cell_cord(*offset))
+                }
+            }
+            return true; // Rule activated.
+        } else {
+            return false; // Didn't activate.
+        }
+    }
+
+    // Generates a set for a given cell.
+    fn generate_cell_group(&self, cell: Cell) -> Option<CellGroup> {
+        // Make a set for all locations given as an offset.
+        let mut offsets = HashSet::new();
+        let mut flag_cnt = 0;
+        // For every neighbor of the given cell.
+        for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
+            // If the neighbor is unexplored.
+            let temp_state = *self.state_at_cord_imm(neighbor);
+            if temp_state == CellKind::Unexplored {
+                // Add the offset to the set.
+                offsets.insert(self.cell_cord_to_offset(neighbor));
+            }
+            // If the neighbor is a flag add to the count of surrounding flags.
+            else if temp_state == CellKind::Flag {
+                flag_cnt += 1
+            }
+        }
+        // If set is empty don't return anything because there is no valid CellGroup
+        if offsets.len() == 0 {
+            return None;
+        }
+
+        // Set bomb num based on the cell's number.
+        if let Some(cell_value) = cell.kind.value() {
+            // The amount of bombs in the CellGroup is the amount there are around the cell minus how many have already been identified
+            let bomb_num = cell_value - flag_cnt;
+            return Some(CellGroup { offsets, bomb_num });
+        }
+        // If the cell doesn't have a number then return nothing because non-numbered cells don't have associated CellGroup.
+        else {
+            None
+        }
+    }
+
+    fn process_frontier(&mut self) {
+        while self.frontier.len() > 0 {
+            let current_cell = self
+                .frontier
+                .pop()
+                .expect("Already checked frontier length > 0.");
+            let cell_group = self.generate_cell_group(current_cell);
+
+            // DEBUG
+            self.save_state_info();
+
+            if let Some(cell_group) = cell_group {
+                // If rule 1 was able to do something currentCell.
+                // Then the rest of the loop is unnecessary.
+
+                // DEBUG
+                self.save_state_info();
+
+                if self.cell_group_rule_1(&cell_group) {
+                }
+                // If rule 2 was able to do something to the currentCell.
+                // Then the rest of the loop is unnecessary.
+                else if self.cell_group_rule_2(&cell_group) {
+                }
+                // If neither rule could do something to the currentCell then add it to a list to apply more advanced techniques to later.
+                // Then add it to the list of cell_group.
+                else {
+                    self.cell_groups.push(cell_group);
+                }
+
+                // DEBUG
+                self.save_state_info();
+            }
+        }
+    }
+
+    // Uses deterministic methods to solve the game.
+    // TODO make processing frontier and CellGroup two separate functions.
+    fn deterministic_solve(&mut self) {
+        // Makes outermost loop always execute at least once.
+        let mut do_while_flag = true;
+        // Loops through frontier and self.cell_groups.
+        // Continues looping until inner loop indicates self.cell_groups can't be processed anymore and outer loop indicates the frontier is empty.
+        while do_while_flag || self.frontier.len() > 0 {
+            do_while_flag = false;
+            while self.frontier.len() > 0 {
+                self.process_frontier()
+            }
+            // Set did_someting to 1 so self.cell_groups is processed at least once.
+            let mut did_something = 1;
+            while did_something > 0 && self.cell_groups.len() > 0 {
+                // Set flag to 0 so it will detect no changes as still being 0.
+                did_something = 0;
+
+                // Simplify any CellGroup that can be simplified.
+                // Following is a for loop of self.cell_groups.len() but the index is changed in some places in the loop so spots aren't missed.
+                let mut i = 0;
+                // for i in 0..self.cell_groups.len() {
+                while i < self.cell_groups.len() {
+                    // TODO split to function START -----------------------------------------------------------------------------------------
+                    // Check to see if any cell_group now contain a flag or an already explored cell.
+                    for offset in self.cell_groups[i].offsets.clone().iter() {
+                        // If the cell_group now contain a flag.
+                        if self.state[*offset] == CellKind::Flag {
+                            // Remove the flag from the cell_group
+                            // and decrease the amount of bombs left.
+                            self.cell_groups[i].offsets.remove(&offset);
+                            self.cell_groups[i].bomb_num -= 1;
+                            did_something += 1;
+                        }
+                        // If the cell_group now contains an not unexplored cell remove that cell as it can't be one of the bombs anymore.
+                        else if self.state[*offset] != CellKind::Unexplored {
+                            self.cell_groups[i].offsets.remove(&offset);
+                            did_something += 1
+                        }
+                        // Below shouldn't be true ever and exists to detects errors.
+                        if self.cell_groups[i].bomb_num as usize > self.cell_groups[i].offsets.len()
+                        {
+                            println!(
+                                "ERROR at self.cell_groups[{i}] has more bombs than cells to fill."
+                            )
+                        }
+                    }
+                    // TODO split to function END -----------------------------------------------------------------------------------------
+
+                    // TODO split to function START -----------------------------------------------------------------------------------------
+                    // Check if a logical operation can be done.
+                    let cell_groups = self.cell_groups[i].clone();
+
+                    // DEBUG
+                    // println!("deterministic");
+
+                    if self.cell_group_rule_1(&cell_groups) {
+                        // Since that cell_group is solved it is no longer needed.
+                        self.cell_groups.swap_remove(i);
+                        // Decrement loop index so this index is not skipped in next iteration now that a new value is in the index's position.
+                        i = usize::saturating_sub(i, 1); // Saturate so a 0 index will terminate on next loop.
+
+                        did_something += 1;
+                    } else if self.cell_group_rule_2(&cell_groups) {
+                        // Since that cell_group is solved it is no longer needed.
+                        self.cell_groups.swap_remove(i);
+
+                        // Decrement loop index so this index is not skipped in next iteration now that a new value is in the index's position.
+                        i = usize::saturating_sub(i, 1); // Saturate so a 0 index will terminate on next loop.
+                        did_something += 1;
+                    }
+                    // Increment loop index
+                    i += 1;
+                }
+                // TODO split to function END -----------------------------------------------------------------------------------------
+
+                // Remove subset-superset overlaps.
+                {
+                    let overlaps_existed;
+                    (overlaps_existed, self.cell_groups) =
+                        remove_complete_cell_group_overlaps(self.cell_groups.clone());
+                    if overlaps_existed {
+                        did_something += 1
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn solve(&mut self, initial_guess: CellCord) {
         // Reveal initial tile.
-        let center = CellCord((self.board_cell_width / 2) as usize, (self.board_cell_height / 2) as usize);
-        self.reveal(center);
+
+        self.reveal(initial_guess);
+
+        let mut did_something = 1;
+        while did_something > 0 {
+            did_something = 0;
+            self.deterministic_solve();
+        }
     }
 
     /// Saves information about this Game to file for potential debugging purposes.
@@ -542,6 +915,46 @@ impl Game {
             .create(true)
             .truncate(true)
             .open("test/FinalGameState.csv")
+            .unwrap();
+
+        for (i, cell) in self.state.iter().enumerate() {
+            let symbol_to_write = match cell {
+                CellKind::One => '1',
+                CellKind::Two => '2',
+                CellKind::Three => '3',
+                CellKind::Four => '4',
+                CellKind::Five => '5',
+                CellKind::Six => '6',
+                CellKind::Seven => '7',
+                CellKind::Eight => '8',
+                CellKind::Flag => 'F',
+                CellKind::Unexplored => 'U',
+                CellKind::Explored => 'E',
+            };
+            if let Err(e) = write!(file, "{symbol_to_write} ") {
+                eprintln!("Couldn't write to file: {}", e);
+            }
+            if (i + 1) % self.board_cell_width as usize == 0 {
+                if let Err(e) = write!(file, "\n") {
+                    eprintln!("Couldn't write to file: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Saves information about this Game to file for potential debugging purposes.
+    pub fn save_state_info_with_path(&self, path: &str) {
+        // save saved game state as picture
+        // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
+
+        // Save game state as csv.
+        // Write create truncate can be set with `let log_file = File::create(&log_file_name).unwrap();` or as below.
+        // Write state to file after formatting nicely.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
             .unwrap();
 
         for (i, cell) in self.state.iter().enumerate() {
@@ -633,6 +1046,12 @@ impl Cell {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CellGroup {
+    offsets: HashSet<usize>,
+    bomb_num: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,7 +1082,7 @@ mod tests {
 
     #[test]
     fn test_board_sub_image_search() {
-        let super_image = read_image("test_in/subimage_search/board.png");
+        let super_image = read_image("test_in/subimage_search/board_plus_extra.png");
         let sub_image = read_image("test_in/subimage_search/cell.png");
         let all_positions = locate_all(&super_image, &sub_image);
         assert!(all_positions.iter().any(|point| *point == Point(10, 48)));
@@ -693,7 +1112,7 @@ mod tests {
             0,
         );
 
-        game.click(CellCord(1, 1));
+        game.click_left_cell_cord(CellCord(1, 1));
     }
 
     /// This test requires manually opening a copy of the game first.
@@ -723,7 +1142,7 @@ mod tests {
 
         game.save_state_info();
         // First move always gives a fully unexplored cell.
-        assert_eq!(game.state_at_cord(place_to_click), CellKind::Explored);
+        assert_eq!(*game.state_at_cord(place_to_click), CellKind::Explored);
     }
 
     /// This test requires manual confirmation.
@@ -757,7 +1176,7 @@ mod tests {
 
     #[test]
     fn identify_cell_test() {
-        let game = Game::build(
+        let mut game = Game::build(
             [
                 "cell_images/1.png",
                 "cell_images/2.png",
@@ -774,7 +1193,6 @@ mod tests {
             read_image("test_in/subimage_search/board.png").to_rgb8(),
             setup_capturer(0),
         );
-
         assert_eq!(
             game.identify_cell(CellCord(3, 3)).unwrap(),
             CellKind::Unexplored
@@ -783,5 +1201,31 @@ mod tests {
             game.identify_cell(CellCord(9, 9)).unwrap(),
             CellKind::Unexplored
         );
+    }
+
+    #[test]
+    fn remove_complete_cell_group_overlaps_test() {
+        let cell_group_vec = vec![
+            CellGroup {
+                bomb_num: 3,
+                offsets: HashSet::from([1, 2, 3, 4, 5]),
+            },
+            CellGroup {
+                bomb_num: 2,
+                offsets: HashSet::from([1, 2, 3, 4]),
+            },
+        ];
+        let (result_bool, result_of_no_overlap) =
+            remove_complete_cell_group_overlaps(cell_group_vec);
+        // dbg!(&result_of_no_overlap);
+        assert!(result_bool);
+        assert!(result_of_no_overlap.contains(&CellGroup {
+            offsets: HashSet::from([4, 2, 1, 3]),
+            bomb_num: 2,
+        }));
+        assert!(result_of_no_overlap.contains(&CellGroup {
+            offsets: HashSet::from([5]),
+            bomb_num: 1,
+        }));
     }
 }

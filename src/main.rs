@@ -1,4 +1,7 @@
-use minesweeper_solver_in_rust::Game;
+use minesweeper_solver_in_rust::{Game, CellCord};
+// TODO in lib
+// TODO save unidentified cell in correct location with name so it can easily be renamed to be added.
+// Replace unwraps with unreachable! where appropriate.
 
 fn main(){
     let mut game = Game::new(
@@ -18,6 +21,6 @@ fn main(){
         0,
     );
 
-    game.solve();
+    game.solve(CellCord(22,10));
     game.save_state_info();
 }

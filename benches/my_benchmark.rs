@@ -43,7 +43,7 @@ fn test_board_sub_image_search_benchmark(c: &mut Criterion) {
 }
 
 fn test_identify_cell_benchmark(c: &mut Criterion) {
-    let game = Game::build(
+    let mut game = Game::build(
         [
             "cell_images/1.png",
             "cell_images/2.png",
@@ -61,7 +61,7 @@ fn test_identify_cell_benchmark(c: &mut Criterion) {
         setup_capturer(0),
     );
     c.bench_function("identify cell on unexplored", |b| {
-        b.iter(|| Game::identify_cell_benchmark_pub_func(black_box(&game)))
+        b.iter(|| Game::identify_cell_benchmark_pub_func(black_box(&mut game)))
     });
 }
 
