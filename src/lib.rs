@@ -3,7 +3,6 @@ use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer,  Rgb,*
 /* use imageproc::rgb_image; */
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
-use imageproc::drawing::Canvas;
 use std::collections::HashSet;
 use std::io::prelude::*;
 use std::{
@@ -320,7 +319,7 @@ pub struct Game {
     board_cell_width: u32,
     board_cell_height: u32,
     top_left: Point,
-    bottom_right: Point,
+    // bottom_right: Point,
     individual_cell_width: u32,
     individual_cell_height: u32,
     board_screenshot: RgbImage,
@@ -375,14 +374,14 @@ impl Game {
         let individual_cell_height = cell_images[9].height();
 
         // Setting the bottom right requires finding hte top left of the last cell and shifting by the cell's width and height to get to the bottom right.
-        let bottom_right = cell_positions
-            .last()
-            .expect("Will only fail if there is no game grid with cells");
-        let offset_from_top_left_corner_to_bottom_right_corner_of_cell =
-            Point(individual_cell_width as i32, individual_cell_height as i32);
+        // let bottom_right = cell_positions
+        //     .last()
+        //     .expect("Will only fail if there is no game grid with cells");
+        // let offset_from_top_left_corner_to_bottom_right_corner_of_cell =
+        //     Point(individual_cell_width as i32, individual_cell_height as i32);
         // Update bottom_right by offset to go from top left to bottom right of last cell.
-        let bottom_right =
-            *bottom_right + offset_from_top_left_corner_to_bottom_right_corner_of_cell;
+        // let bottom_right =
+        //     *bottom_right + offset_from_top_left_corner_to_bottom_right_corner_of_cell;
 
         let mut biggest: i32 = 0; // Temp variable for holding the largest position in the following iterations.
         let mut cell_width = 0;
@@ -418,7 +417,7 @@ impl Game {
             board_cell_width: cell_width as u32,
             board_cell_height: cell_height as u32,
             top_left,
-            bottom_right,
+            // bottom_right,
             individual_cell_width,
             individual_cell_height,
             capturer,
@@ -700,28 +699,13 @@ impl Game {
     }
 
     fn cell_group_rule_2(&mut self, cell_group: &CellGroup) -> bool {
-        // If set of cells has no bomb.
+        // If set of cells has no bomb. (bomb_num is 0 from previous if)
         if cell_group.bomb_num == 0 {
-            // DEBUG
-            self.save_state_info_with_path("test/before.csv");
-
-            // TODO somehow the below for loop is when the state updates.
-            // Reveal all cells in the set.
+            // The reveals at the end might affect cells that have yet to be changed.
             for offset in cell_group.offsets.iter() {
-                // DEBUG
-                self.save_state_info_with_path("test/after.csv");
-
-                // DEBUG if statement
-                if self.state[*offset] != CellKind::Unexplored {
-                    println!("Skipping trying to reveal something already revealed. It is at {:#?} and is a {:#?}", self.offset_to_cell_cord(*offset), self.state[*offset]);
-                    for offset in cell_group.offsets.iter() {
-                        println!(
-                            "Part of cell_group containing offset {offset:#?} and cord {:#?}",
-                            self.offset_to_cell_cord(*offset)
-                        )
-                    }
-                } else {
-                    self.reveal(self.offset_to_cell_cord(*offset))
+                // If a previous iteration of this loop didn't already reveal that cell, then reveal that cell.
+                if self.state[*offset] == CellKind::Unexplored {
+                    self.reveal(self.offset_to_cell_cord(*offset));
                 }
             }
             return true; // Rule activated.
