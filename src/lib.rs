@@ -4,6 +4,7 @@ use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer,  Rgb,*
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::io::prelude::*;
 use std::{
     error::Error,
@@ -309,6 +310,72 @@ impl CellKind {
     }
 }
 
+/// Outputs an unordered vector. The vector is the result of merging all sets that share any item in common.
+/// This transitively applies until all elements that are somehow linked through these sets are in a single set.
+/// The resulting vector contains pairwise disjoint sets.
+/// # Examples
+/// ```
+/// use minesweeper_solver_in_rust::merge_overlapping_sets;
+/// use std::collections::HashSet;
+///
+/// assert_eq!(
+/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3]), HashSet::from([1,2]), HashSet::from([4])])),
+/// vec![HashSet::from([1, 2, 3]), HashSet::from([4])]);
+///
+/// assert_eq!(
+/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3,4]), HashSet::from([1,2]), HashSet::from([4])])),
+/// vec![HashSet::from([1, 3, 2, 4])]);
+///
+/// assert_eq!(
+/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3,4]), HashSet::from([1,2]), HashSet::from([4]), HashSet::from([5,6]), HashSet::from([7])])),
+/// vec![HashSet::from([3, 1, 4, 2]), HashSet::from([5, 6]), HashSet::from([7])]);
+///
+/// assert_eq!(
+/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3,4]), HashSet::from([1,2]), HashSet::from([4]), HashSet::from([5,6]), HashSet::from([4, 7])])),
+/// vec![HashSet::from([3, 1, 4, 2, 7]), HashSet::from([5, 6])]);
+///
+/// assert_eq!(
+/// merge_overlapping_sets(Vec::from([HashSet::from(['a','b','c','d']), HashSet::from(['a','g']), HashSet::from(['e']), HashSet::from(['f','h']), HashSet::from(['k', 'a']), HashSet::from(['k', 'z'])])),
+/// vec![HashSet::from(['z', 'd', 'b', 'c', 'a', 'k', 'g']), HashSet::from(['e']), HashSet::from(['h', 'f'])]);
+/// ```
+pub fn merge_overlapping_sets<T>(sets: Vec<HashSet<T>>) -> Vec<HashSet<T>>
+where
+    T: Eq + Hash + Clone,
+{
+    let mut merged_sets: Vec<HashSet<T>> = Vec::new();
+    for s in sets {
+        let mut is_overlapping = false;
+
+        for t in &mut merged_sets {
+            let intersection: HashSet<T> = s.intersection(t).cloned().collect();
+            if !intersection.is_empty() {
+                let union: HashSet<T> = s.union(t).cloned().collect();
+                *t = union;
+                is_overlapping = true;
+                break;
+            }
+        }
+
+        if !is_overlapping {
+            merged_sets.push(s);
+        }
+    }
+    let mut result: Vec<HashSet<T>> = Vec::new();
+    for set in merged_sets {
+        let mut flag = true;
+        for s in &result {
+            if s.is_subset(&set) {
+                flag = false;
+                break;
+            }
+        }
+        if flag {
+            result.push(set);
+        }
+    }
+    result
+}
+
 /// Holds the information related to the current state of the game.
 pub struct Game {
     cell_images: Vec<RgbImage>,
@@ -571,7 +638,7 @@ impl Game {
         }
 
         // If all cell images were matched and none worked.
-        println!("UNIDENTIFIED CELL at cord: {:#?}", cord);
+        println!("UNIDENTIFIED CELL at cord: {:?}", cord);
         save_image("cell_images/Unidentified.png", section_of_board);
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
         self.save_state_info();
@@ -681,9 +748,6 @@ impl Game {
     /// Rule 1 implemented with sets. If the amount of bombs in a set is the same as the amount of cells in a set, they are all bombs.
     /// Returns a bool indicating whether the rule did something.
     fn cell_group_rule_1(&mut self, cell_group: &CellGroup) -> bool {
-        // DEBUG
-        self.save_state_info();
-
         // If the number of bombs in the set is the same as the size of the set.
         if cell_group.bomb_num as usize == cell_group.offsets.len() {
             // Flag all cells in set.
@@ -757,16 +821,9 @@ impl Game {
                 .expect("Already checked frontier length > 0.");
             let cell_group = self.generate_cell_group(current_cell);
 
-            // DEBUG
-            self.save_state_info();
-
             if let Some(cell_group) = cell_group {
                 // If rule 1 was able to do something currentCell.
                 // Then the rest of the loop is unnecessary.
-
-                // DEBUG
-                self.save_state_info();
-
                 if self.cell_group_rule_1(&cell_group) {
                 }
                 // If rule 2 was able to do something to the currentCell.
@@ -778,9 +835,6 @@ impl Game {
                 else {
                     self.cell_groups.push(cell_group);
                 }
-
-                // DEBUG
-                self.save_state_info();
             }
         }
     }
@@ -837,9 +891,6 @@ impl Game {
                     // TODO split to function START -----------------------------------------------------------------------------------------
                     // Check if a logical operation can be done.
                     let cell_groups = self.cell_groups[i].clone();
-
-                    // DEBUG
-                    // println!("deterministic");
 
                     if self.cell_group_rule_1(&cell_groups) {
                         // Since that cell_group is solved it is no longer needed.
