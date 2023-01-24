@@ -5,7 +5,7 @@ use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::io::prelude::*;
 use std::{
     error::Error,
@@ -13,7 +13,6 @@ use std::{
     fs::OpenOptions,
     ops::{Add, Sub},
 };
-
 // TODO replace "as usize" with .try_into().unwrap()
 // TODO change usize operations with checked_sub or checked_add etc..
 
@@ -377,9 +376,41 @@ where
     result
 }
 
+fn merge_overlapping_groups<'a, T>(groups: &'a Vec<CellGroup>) -> Vec<HashSet<&'a CellGroup>>
+where
+    T: Eq + Hash + Clone,
+    HashSet<T>: FromIterator<usize>,
+{
+    let mut merged_groups: Vec<HashSet<&CellGroup>> = Vec::new();
+    for group in groups {
+        let mut is_overlapping = false;
+
+        for t in &mut merged_groups {
+            let intersection: HashSet<T> = group
+                .offsets
+                .intersection(&t.iter().next().unwrap().offsets)
+                .cloned()
+                .collect();
+            if !intersection.is_empty() {
+                t.insert(&group);
+                is_overlapping = true;
+                break;
+            }
+        }
+
+        if !is_overlapping {
+            let mut set = HashSet::new();
+            set.insert(group);
+            merged_groups.push(set);
+        }
+    }
+    merged_groups
+}
+
 /// Simple factorial calculation for positive integers.
 /// # Examples
 /// ```
+/// use minesweeper_solver_in_rust::factorial;
 /// assert_eq!(factorial(3), 6);
 /// ```
 pub fn factorial(n: u64) -> u64 {
@@ -874,26 +905,35 @@ impl Game {
                 while i < self.cell_groups.len() {
                     // TODO split to function START -----------------------------------------------------------------------------------------
                     // Check to see if any cell_group now contain a flag or an already explored cell.
-                    for offset in self.cell_groups[i].offsets.clone().iter() {
+                    for offset in self.cell_groups[i].offsets.clone().into_iter() {
                         // If the cell_group now contain a flag.
-                        if self.state[*offset] == CellKind::Flag {
+                        if self.state[offset] == CellKind::Flag {
                             // Remove the flag from the cell_group
                             // and decrease the amount of bombs left.
-                            self.cell_groups[i].offsets.remove(&offset);
+                            if !self.cell_groups[i].offsets.remove(&offset) {
+                                panic!(
+                                    "Removed offset: {:?} that wasn't in cell_group: {:?}.",
+                                    offset, self.cell_groups[i]
+                                )
+                            };
                             self.cell_groups[i].bomb_num -= 1;
+                            if self.cell_groups[i].offsets.len()
+                                < self.cell_groups[i].bomb_num as usize
+                            {
+                                panic!("There are more bombs than places to put them. Removed offset: {:?} as it was a flag in in cell_group: {:?}.", offset, self.cell_groups[i]);
+                            }
                             did_something += 1;
                         }
                         // If the cell_group now contains an not unexplored cell remove that cell as it can't be one of the bombs anymore.
-                        else if self.state[*offset] != CellKind::Unexplored {
+                        else if self.state[offset] != CellKind::Unexplored {
                             self.cell_groups[i].offsets.remove(&offset);
                             did_something += 1
                         }
                         // Below shouldn't be true ever and exists to detects errors.
                         if self.cell_groups[i].bomb_num as usize > self.cell_groups[i].offsets.len()
                         {
-                            println!(
-                                "ERROR at self.cell_groups[{i}] has more bombs than cells to fill."
-                            )
+                            self.save_state_info();
+                            panic!("ERROR at self.cell_groups[{i}]={:?} has more bombs than cells to fill.",self.cell_groups[i]);
                         }
                     }
                     // TODO split to function END -----------------------------------------------------------------------------------------
@@ -935,9 +975,135 @@ impl Game {
         }
     }
 
+    fn enumerate_all_possible_arrangements(
+        &self,
+        sub_group_bomb_num_lower_limit: usize,
+        sub_group_bomb_num_upper_limit: usize,
+        sub_group_total_offsets_after_overlaps_removed: HashSet<usize>,
+        sub_group: HashSet<&CellGroup>,
+    ) -> (i32, HashMap<usize, i32>) {
+        // DEBUG
+        let sub_group_for_debug = sub_group.clone();
+
+        // Iterate through all possible amounts of bombs in the subgroup.
+        // Calculate odds as the amount of times a bomb appeared in a position divided by number of valid positions.
+        // Division is done because comparison at the end will include other probabilities with different denominators.
+        // Holds how often a bomb occurs in each offset position.
+        let mut occurrences_of_bomb_per_offset: HashMap<_, _> =
+            sub_group_total_offsets_after_overlaps_removed
+                .iter()
+                .map(|offset| (*offset, 0))
+                .collect();
+        let mut number_of_valid_combinations = 0;
+        for sub_group_bomb_num in
+            0.max(sub_group_bomb_num_lower_limit)..(sub_group_bomb_num_upper_limit + 1)
+        {
+            // Count up how many times a bomb occurs in each offset position.
+            'combinations: for combination in sub_group_total_offsets_after_overlaps_removed
+                .iter()
+                .combinations(sub_group_bomb_num)
+            {
+                // Verifies that the number of bombs in this combination is not invalid for each individual CellGroup
+                for cell_group in sub_group.iter() {
+                    // Stores how many bombs are in a CellGroup for this particular arrangement of bombs.
+                    let mut individual_cell_group_bomb_num_for_specific_combination = 0;
+                    // For every offset in CellGroup.
+                    for offset in cell_group.offsets.iter() {
+                        // If the offset is a bomb.
+                        if combination.contains(&&offset) {
+                            // Count up how many bombs are in the CellGroup for this arrangement.
+                            individual_cell_group_bomb_num_for_specific_combination += 1;
+                        }
+                    }
+                    // If the amount of bombs isn't the right amount.
+                    // Go to the next combination because this one doesn't work.
+                    if individual_cell_group_bomb_num_for_specific_combination
+                        != cell_group.bomb_num
+                    {
+                        continue 'combinations;
+                    }
+                }
+                // Since the amount of bombs is correct.
+                // For every offset in this valid combination.
+                // Increment the amount of bombs at each offset.
+                for offset in combination {
+                    *(occurrences_of_bomb_per_offset.get_mut(offset).unwrap()) += 1;
+                }
+
+                // Since the arrangement is valid increment the number of valid arrangements.
+                number_of_valid_combinations += 1
+            }
+        }
+        if number_of_valid_combinations == 0 {
+            dbg!(sub_group_for_debug);
+        }
+        return (number_of_valid_combinations, occurrences_of_bomb_per_offset);
+    }
+
+    fn update_likelihoods_from_enumerated_arrangements(
+        &self,
+        mut most_likely_positions: Vec<usize>,
+        mut most_likelihood: f64,
+        mut least_likely_positions: Vec<usize>,
+        mut least_likelihood: f64,
+        number_of_valid_combinations: i32,
+        occurrences_of_bomb_per_offset: HashMap<usize, i32>,
+    ) -> Option<(Vec<usize>, f64, Vec<usize>, f64)> {
+        // If there was a valid combination.
+        if number_of_valid_combinations > 0
+        // TODO remove next line I don't know why it is here.
+        // && occurrences_of_bomb_per_offset.values().max().unwrap() > &0
+        {
+            // Enumerate offsets and chances of those offsets.
+            for (offset, occurrence_of_bomb_at_offset) in occurrences_of_bomb_per_offset.iter() {
+                // The chance a bomb is somewhere is the amount of combinations a bomb occurred in that position divided by how many valid combinations there are total.
+                let chance_of_bomb_at_position: f64 =
+                    *occurrence_of_bomb_at_offset as f64 / number_of_valid_combinations as f64;
+
+                if chance_of_bomb_at_position > most_likelihood {
+                    // If likelyhood of bomb is higher than previously recorded.
+                    // Update likelyhood
+                    // and update position with highest likelyhood.
+                    most_likelihood = chance_of_bomb_at_position;
+                    most_likely_positions = vec![*offset];
+                }
+                // If the likelyhood is 100% then add it anyway because 100% means theres a bomb for sure and it should be flagged regardless.
+                else if chance_of_bomb_at_position == 1.0 {
+                    // update likelyhood and append position of garrunteed bomb.
+                    most_likelihood = 1.0;
+                    most_likely_positions.push(*offset);
+                }
+                // Same thing but for leastlikelyhood.
+                if chance_of_bomb_at_position < least_likelihood {
+                    least_likelihood = chance_of_bomb_at_position;
+                    least_likely_positions = vec![*offset];
+                }
+                // If the chance of a bomb is zero then it is guaranteed to not have a mine and should be revealed regardless.
+                else if chance_of_bomb_at_position == 0.0 {
+                    least_likelihood = 0.0;
+                    least_likely_positions.push(*offset);
+                }
+            }
+            return Some((
+                most_likely_positions,
+                most_likelihood,
+                least_likely_positions,
+                least_likelihood,
+            ));
+        } else {
+            return None;
+        };
+    }
+
     /// Make best guess from all possibilities.
     fn probabalistic_guess(&mut self) -> u32 {
         let mut did_something = 0;
+
+        // Keep track of the most and least likely places for there to be a bomb and the likelyhood of each.
+        let mut most_likely_positions = Vec::new();
+        let mut most_likelihood = -1.0;
+        let mut least_likely_positions = Vec::new();
+        let mut least_likelihood = 101.0;
 
         // Get a vec of all the offsets so they can be merged in next step.
         let mut offset_vec = Vec::with_capacity(self.cell_groups.len());
@@ -947,51 +1113,53 @@ impl Game {
 
         // Find the sub groups of the grid of interconnected cell_groups that are not related or interconnected.
         // Basically partitions board so parts that don't affect each other are handled separately to make the magnitudes of the combinations later on more managable.
-        let sub_groups = merge_overlapping_sets(offset_vec);
-
-        // Keep track of the most and least likely places for there to be a bomb and the likelyhood of each.
-        let mut most_likely_positions = Vec::new();
-        let mut most_likelihood = -1;
-        let mut least_likely_positions = Vec::new();
-        let mut least_likelihood = 101;
+        let sub_groups = merge_overlapping_groups(&self.cell_groups);
 
         // For each independent sub group of cell_groups.
         for sub_group in sub_groups {
-            let mut sub_group_total_offsets = Vec::new();
-            let mut sub_group_bomb_num_upper_limit_for_complete_unshared_bombs = 0;
+            let mut sub_group_total_offsets: Vec<usize> = Vec::new();
+            let mut sub_group_bomb_num_upper_limit_for_completely_unshared_bombs = 0;
 
-            // Put all offsets of corresponding subgroup into a Vec.
-            for offset in sub_group.iter() {
-                for offset in self.cell_groups[*offset].offsets.clone() {
-                    // Add to the list of offsets in the subgroup.
-                    sub_group_total_offsets.push(offset);
-                }
-                // The upper limit on the number of bombs in a subgroup is if all the cell_groups share no bombs.
+            // Put all offsets of corresponding subgroup into a Vec. Also count how many bombs exist if there are no duplicates.
+            for cell_group in sub_group.iter() {
+                sub_group_total_offsets.extend(cell_group.offsets.clone());
+
+                // The upper limit on the number of bombs in a subgroup is if all the CellGroup share no bombs.
                 // This number is the sum total of simply adding each bomb_num.
-                sub_group_bomb_num_upper_limit_for_complete_unshared_bombs +=
-                    self.cell_groups[*offset].bomb_num;
+                sub_group_bomb_num_upper_limit_for_completely_unshared_bombs += cell_group.bomb_num;
             }
 
             // Save how many offsets with overlaps there are.
             // Do this by saving how many offsets exist before (here) and after (later) merging.
-            let number_of_subgroup_offsets_before_overlaps_removed = sub_group_total_offsets.len();
+            let number_of_subgroup_total_offsets_before_overlaps_removed =
+                sub_group_total_offsets.len();
 
             // Remove overlaps here by converting to a set which by defintion contains no duplicates.
-            let sub_group_total_offsets: HashSet<_> = sub_group_total_offsets.into_iter().collect();
+            let sub_group_total_offsets_after_overlaps_removed: HashSet<usize> =
+                sub_group_total_offsets.into_iter().collect();
+            let number_of_sub_group_total_offsets_after_overlaps_removed =
+                sub_group_total_offsets_after_overlaps_removed.len();
 
             // An upper limit of bombs is if every intersection does not have a bomb.
             // Another is the number of positions in the sub_group. It can't have more bombs than it has positions.
             // Set upperlimit to the smaller upperlimit.
-            let sub_group_bomb_num_upper_limit = sub_group_total_offsets
-                .len()
-                .min(sub_group_bomb_num_upper_limit_for_complete_unshared_bombs as usize);
+            let sub_group_bomb_num_upper_limit =
+                number_of_sub_group_total_offsets_after_overlaps_removed
+                    .min(sub_group_bomb_num_upper_limit_for_completely_unshared_bombs as usize);
 
             // The lower limit on bombs is if every intersection had a bomb.
             // It is the same as upper limit (no bombs at intersections or number of places for a bomb to be) minus the number of intersections.
             // This is because each intersection is another place where the bomb could have been double counted in the upper limit.
-            let sub_group_bomb_num_lower_limit = sub_group_bomb_num_upper_limit
-                - (number_of_subgroup_offsets_before_overlaps_removed
-                    - sub_group_total_offsets.len());
+            // Saturating subtraction because lower_limit can't be negative but the subtraction might if there are more overlaps than maximum upper limit.
+            let sub_group_bomb_num_lower_limit = sub_group_bomb_num_upper_limit.saturating_sub(
+                number_of_subgroup_total_offsets_before_overlaps_removed
+                    - number_of_sub_group_total_offsets_after_overlaps_removed,
+            );
+
+            // DEBUG
+            // dbg!(sub_group_bomb_num_upper_limit);
+            // dbg!(number_of_subgroup_total_offsets_before_overlaps_removed);
+            // dbg!(number_of_sub_group_total_offsets_after_overlaps_removed);
 
             // Check that the amount of combinations will not exceed the global variable for the maximum combinations.
             // If it does this will take too long.
@@ -1000,10 +1168,13 @@ impl Game {
             for sub_group_bomb_num in
                 0.max(sub_group_bomb_num_lower_limit)..(sub_group_bomb_num_upper_limit + 1)
             {
-                // Calculate the amount of combinations.
-                let combination_amount = factorial(sub_group_total_offsets.len() as u64)
-                    / (factorial(sub_group_total_offsets.len() as u64 - sub_group_bomb_num as u64)
-                        * factorial(sub_group_bomb_num as u64));
+                // Calculate the amount of combinations. Integer division means it might be off by one but that doesn't matter.
+                let combination_amount =
+                    factorial(sub_group_total_offsets_after_overlaps_removed.len() as u64)
+                        / (factorial(
+                            sub_group_total_offsets_after_overlaps_removed.len() as u64
+                                - sub_group_bomb_num as u64,
+                        ) * factorial(sub_group_bomb_num as u64));
                 combination_total += combination_amount;
 
                 // DEBUG
@@ -1017,108 +1188,43 @@ impl Game {
                 }
             }
 
-            // TODO replace loop with function call that internally verifies and counts valid arrangements the same way.
-            // Iterate through all possible amounts of bombs in the subgroup.
-            // Calculate odds as the amount of times a bomb appeared in a position divided by number of valid positions.
-            // Division is done because comparison at the end will include other probabilities with different denominators.
-            // Holds how often a bomb occurs in each offset position.
-            let mut occurrences_of_bomb_per_offset: HashMap<_, _> = sub_group_total_offsets
-                .iter()
-                .map(|offset| (*offset, 0))
-                .collect();
-            let mut number_of_valid_combinations = 0;
-            for sub_group_bomb_num in
-                0.max(sub_group_bomb_num_lower_limit)..(sub_group_bomb_num_upper_limit + 1)
-            {
-                // Count up how many times a bomb occurs in each offset position.
-                'combinations: for combination in sub_group_total_offsets
-                    .iter()
-                    .combinations(sub_group_bomb_num)
-                {
-                    // Verifies that the number of bombs in this combination is not invalid for each individual CellGroup
-                    for sub_group_offset in &sub_group {
-                        // Stores how many bombs are in a CellGroup for this particular arrangement of bombs.
-                        let mut individual_cell_group_bomb_num_for_specific_combination = 0;
-                        // For every offset in CellGroup.
-                        for offset in &self.cell_groups[*sub_group_offset].offsets {
-                            // If the offset is a bomb.
-                            if combination.contains(&&offset) {
-                                // Count up how many bombs are in the CellGroup for this arrangement.
-                                individual_cell_group_bomb_num_for_specific_combination += 1;
-                            }
-                        }
-                        // If the amount of bombs isn't the right amount.
-                        // Go to the next combination because this one doesn't work.
-                        if individual_cell_group_bomb_num_for_specific_combination
-                            != self.cell_groups[*sub_group_offset].bomb_num
-                        {
-                            continue 'combinations;
-                        }
-                    }
-                    // Since the amount of bombs is correct.
-                    // For every offset in this valid combination.
-                    // Increment the amount of bombs at each offset.
-                    for offset in combination {
-                        *(occurrences_of_bomb_per_offset.get_mut(offset).unwrap()) += 1;
-                    }
+            let (number_of_valid_combinations, occurrences_of_bomb_per_offset) = self
+                .enumerate_all_possible_arrangements(
+                    sub_group_bomb_num_lower_limit,
+                    sub_group_bomb_num_upper_limit,
+                    sub_group_total_offsets_after_overlaps_removed,
+                    sub_group,
+                );
 
-                    // Since the arrangement is valid increment the number of valid arrangements.
-                    number_of_valid_combinations += 1
+            (
+                most_likely_positions,
+                most_likelihood,
+                least_likely_positions,
+                least_likelihood,
+            ) = match self.update_likelihoods_from_enumerated_arrangements(
+                most_likely_positions,
+                most_likelihood,
+                least_likely_positions,
+                least_likelihood,
+                number_of_valid_combinations,
+                occurrences_of_bomb_per_offset,
+            ) {
+                Some(x) => x,
+                None => {
+                    self.save_state_info();
+                    dbg!(sub_group_bomb_num_lower_limit);
+                    dbg!(sub_group_bomb_num_upper_limit);
+                    panic!("There were no valid combinations!")
                 }
-            }
-            // TODO to function END
-
-            // TODO to function START
-            // If there was a valid combination.
-            if number_of_valid_combinations > 0
-                && occurrences_of_bomb_per_offset.values().max().unwrap() > &0
-            {
-                // Enumerate offsets and chances of those offsets.
-                for (offset, occurrence_of_bomb_at_offset) in occurrences_of_bomb_per_offset.iter() {
-                    // The chance a bomb is somewhere is the amount of combinations a bomb occurred in that position divided by how many valid combinations there are total.
-                    let chance_of_bomb_at_position = occurrence_of_bomb_at_offset / number_of_valid_combinations;
-
-                    // TODO make function instead of this duplicated code below.
-                    if chance_of_bomb_at_position > most_likelihood {
-                        // If likelyhood of bomb is higher than previously recorded.
-                        // Update likelyhood
-                        // and update position with highest likelyhood.
-                        most_likelihood = chance_of_bomb_at_position;
-                        most_likely_positions = vec![*offset];
-                    }
-                    // If the likelyhood is 100% then add it anyway because 100% means theres a bomb for sure and it should be flagged regardless.
-                    else if chance_of_bomb_at_position == 1 {
-                        // update likelyhood and append position of garrunteed bomb.
-                        most_likelihood = 1;
-                        most_likely_positions.push(*offset);
-                    }
-                    // Same thing but for leastlikelyhood.
-                    if chance_of_bomb_at_position < least_likelihood {
-                        least_likelihood = chance_of_bomb_at_position;
-                        least_likely_positions = vec![*offset];
-                    }
-                    // If the chance of a bomb is zero then it is guaranteed to not have a mine and should be revealed regardless.
-                    else if chance_of_bomb_at_position == 0 {
-                        least_likelihood = 0;
-                        least_likely_positions.push(*offset);
-                    }
-                }
-            }
-            // TODO to function END
-
-            // Make decisions based on likelyhoods.
-            // Next is a quick to run debug line to make sure things aren't super broken.
-            /* if mostLikelyHood < 0 or leastLikelyHood > 100:  # if couldn't find valid combination
-            print(f"DEBUG PRINT for linkedCells with cords and bombs{[[[self.convertOffsetToCord(offset) for offset in group.linkedCellsOffsets],group.bombNum] for group in self.cell_groups]} and subgroups {subGroups} also bomb occurrence per cell for statistics is {[(self.convertOffsetToCord(item),item2) for item,item2 in list(offsetsOccurrenceOfBombs.items())]}")
-            return 0 */
+            };
         }
         // TODO make code below new function.
         // If more certain about where a bomb isn't than where one is.
-        if most_likelihood <= 1 - least_likelihood {
+        if most_likelihood <= 1.0 - least_likelihood {
             // Then reveal all spots with lowest odds of bomb.
             for least_likely_position in least_likely_positions {
                 println!(
-                    "Revealing offset {:?} with odds {:?} of being bomb",
+                    "Revealing {:?} with odds {:?} of being bomb",
                     self.offset_to_cell_cord(least_likely_position),
                     least_likelihood
                 );
@@ -1127,15 +1233,15 @@ impl Game {
             did_something += 1;
         }
         // If more certain about where a bomb is than where one isn't.
-        else if most_likelihood > 1 - least_likelihood {
+        else if most_likelihood > 1.0 - least_likelihood {
             // Then flag all spots with lowest odds of bomb.
-            for most_likely_position in &most_likely_positions {
+            for most_likely_position in most_likely_positions {
                 println!(
-                    "Flagging spot {:?} with odds {:?} of being bomb",
-                    self.offset_to_cell_cord(*most_likely_position),
+                    "Flagging {:?} with odds {:?} of being bomb",
+                    self.offset_to_cell_cord(most_likely_position),
                     most_likelihood
                 );
-                self.flag(self.offset_to_cell_cord(*most_likely_position));
+                self.flag(self.offset_to_cell_cord(most_likely_position));
                 did_something += 1;
             }
         }
@@ -1306,10 +1412,18 @@ impl Cell {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CellGroup {
     offsets: HashSet<usize>,
     bomb_num: u32,
+}
+
+impl Hash for CellGroup {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for offset in self.offsets.iter() {
+            offset.hash(state);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1477,7 +1591,6 @@ mod tests {
         ];
         let (result_bool, result_of_no_overlap) =
             remove_complete_cell_group_overlaps(cell_group_vec);
-        // dbg!(&result_of_no_overlap);
         assert!(result_bool);
         assert!(result_of_no_overlap.contains(&CellGroup {
             offsets: HashSet::from([4, 2, 1, 3]),
@@ -1487,5 +1600,26 @@ mod tests {
             offsets: HashSet::from([5]),
             bomb_num: 1,
         }));
+    }
+
+    #[test]
+    fn merge_overlapping_groups_test() {
+        let cell1 = CellGroup {
+            offsets: HashSet::from([1, 2]),
+            bomb_num: 1,
+        };
+        let cell2 = CellGroup {
+            offsets: HashSet::from([1, 2, 3]),
+            bomb_num: 2,
+        };
+        let cell3 = CellGroup {
+            offsets: HashSet::from([8, 9, 10]),
+            bomb_num: 2,
+        };
+        let groups = vec![cell1.clone(), cell2.clone(), cell3.clone()];
+        let output = merge_overlapping_groups(&groups);
+        assert!(&output[0].contains(&cell1));
+        assert!(&output[0].contains(&cell2));
+        assert!(&output[1].contains(&cell3));
     }
 }
