@@ -631,6 +631,7 @@ dependencies = [
  "enum-iterator",
  "image",
  "imageproc",
+ "itertools",
 ]
 
 [[package]]
