@@ -1,6 +1,7 @@
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+overflow-checks = true
 
 [package]
 name = "minesweeper_solver_in_rust"

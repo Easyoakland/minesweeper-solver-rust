@@ -86,8 +86,8 @@ fn capture_rgb_frame(capturer: &mut Capturer) -> Vec<u8> {
         let temp = capturer.capture_frame();
         match temp {
             Ok(frame) => {
-                // The capacity of rgb_vec should be the 3 (rgb) for each rgba pixel
-                let mut rgb_vec = Vec::with_capacity(3 * (frame.capacity() / 4));
+                // The capacity of rgb_vec should be the 3 times (rgb) for each rgba pixel since r g and b are separately pulled out but frame has them as a single element.
+                let mut rgb_vec = Vec::with_capacity(3 * frame.capacity());
                 for Bgr8 {
                     r,
                     g,
