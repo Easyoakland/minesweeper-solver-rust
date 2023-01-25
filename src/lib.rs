@@ -4,15 +4,16 @@ use image::{imageops, io, DynamicImage, GenericImageView, /* ImageBuffer,  Rgb,*
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::io::prelude::*;
 use std::{
+    collections::{HashMap, HashSet},
     error::Error,
     fmt,
     fs::OpenOptions,
+    hash::{Hash, Hasher},
+    io::prelude::*,
     ops::{Add, Sub},
 };
+
 // TODO replace "as usize" with .try_into().unwrap()
 // TODO change usize operations with checked_sub or checked_add etc..
 
@@ -262,9 +263,9 @@ fn remove_complete_cell_group_overlaps(
 
                 did_something = true;
 
-                // Decrease the bomb count of the superset by the subset's bombcount.
-                cell_group_vec[j].bomb_num =
-                    cell_group_vec[j].bomb_num - cell_group_vec[i].bomb_num;
+                // Decrease the mine count of the superset by the subset's minecount.
+                cell_group_vec[j].mine_num =
+                    cell_group_vec[j].mine_num - cell_group_vec[i].mine_num;
             }
         }
     }
@@ -415,6 +416,168 @@ where
 /// ```
 pub fn factorial(n: u64) -> u64 {
     (2..(n + 1)).product()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CellGroup {
+    offsets: HashSet<usize>,
+    mine_num: u32,
+}
+
+impl Hash for CellGroup {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for offset in self.offsets.iter() {
+            offset.hash(state);
+        }
+    }
+}
+
+fn neighbors_of_cord(
+    cord: CellCord,
+    radius: usize,
+    board_cell_width: u32,
+    board_cell_height: u32,
+) -> Vec<CellCord> {
+    let mut neighbors = Vec::new();
+    // Goes from left to right and from top to bottom generating neighbor cords.
+    // Each radius increases number of cells in each dimension by 2 starting with 1 cell at radius = 0
+    for j in 0..2 * radius + 1 {
+        for i in 0..2 * radius + 1 {
+            // TODO check that usize doesn't overflow here for negative cords.
+            let x: i64 = cord.0 as i64 - radius as i64 + i as i64;
+            let y: i64 = cord.1 as i64 - radius as i64 + j as i64;
+            // Don't make neighbors with negative cords.
+            if x < 0 || y < 0 {
+                continue;
+            }
+            // If neither is negative can safely convert to unsigned.
+            let x = x as usize;
+            let y = y as usize;
+
+            // Don't make neighbors with cords beyond the bounds of the board.
+            if x > board_cell_width as usize - 1 || y > board_cell_height as usize - 1 {
+                continue;
+            }
+
+            // Don't add self to neighbor list.
+            if x == cord.0 && y == cord.1 {
+                continue;
+            }
+
+            neighbors.push(CellCord(x, y));
+        }
+    }
+
+    return neighbors;
+}
+
+fn cell_cord_to_offset(board_cell_width: u32, cord: CellCord) -> usize {
+    let x_offset = cord.0;
+    let y_offset = board_cell_width as usize * (cord.1);
+    let total_offset = x_offset + y_offset;
+    return total_offset;
+}
+
+fn offset_to_cell_cord(board_cell_width: u32, mut offset: usize) -> CellCord {
+    let mut cnt = 0;
+    while offset >= board_cell_width as usize {
+        offset = offset - board_cell_width as usize;
+        cnt += 1
+    }
+    let y = cnt;
+    let x = offset;
+    // y = int(Offset/self._width)
+    // x = int(Offset-y*self._width)
+    return CellCord(x, y);
+}
+
+/* fn neighbors_of_offset(
+    mut offset: usize,
+    radius: usize,
+    board_cell_width: u32,
+    board_cell_height: u32,
+) -> Vec<CellCord> {
+    let cord = {
+        let mut cnt = 0;
+        while offset >= board_cell_width as usize {
+            offset = offset - board_cell_width as usize;
+            cnt += 1
+        }
+        let y = cnt;
+        let x = offset;
+        // y = int(Offset/self._width)
+        // x = int(Offset-y*self._width)
+        CellCord(x, y)
+    };
+    return neighbors_of_cord(cord, radius, board_cell_width, board_cell_height);
+} */
+
+struct Cell {
+    cord: CellCord,
+    kind: CellKind,
+}
+
+impl Cell {
+    // Returns cords of all neighbors that exist.
+    fn neighbors(
+        &self,
+        radius: usize,
+        board_cell_width: u32,
+        board_cell_height: u32,
+    ) -> Vec<CellCord> {
+        return neighbors_of_cord(self.cord, radius, board_cell_width, board_cell_height);
+    }
+}
+
+#[derive(Debug)]
+pub struct Simulation {
+    state: Vec<bool>,
+    board_cell_width: u32,
+    board_cell_height: u32,
+}
+
+impl Simulation {
+    pub fn new(width: u32, height: u32, mine_num: u32) -> Simulation {
+        let mut state = Vec::with_capacity(width as usize * height as usize);
+
+        // Generate random unique indexes until there are enough to represent each mine.
+        let mut mine_pos: Vec<u32> = vec![];
+        while mine_pos.len() != mine_num as usize {
+            let random_num = rand::random::<u32>() % (width*height);
+            if !mine_pos.contains(&random_num) {
+                mine_pos.push(random_num);
+            }
+        }
+
+        // Make a state where each position is not a mine unless its index matches one of the mine positions.
+        for h in 0..height {
+            for w in 0..width {
+                state.push(mine_pos.contains(&(w * width + h)));
+            }
+        }
+        return Simulation {
+            state,
+            board_cell_width: width,
+            board_cell_height: height,
+        };
+    }
+    pub fn is_mine(&self, index: usize) -> bool {
+        return self.state[index];
+    }
+    pub fn value(&self, index: usize) -> u32 {
+        let mut surrounding_mines = 0;
+        for neighbor in neighbors_of_cord(
+            offset_to_cell_cord(self.board_cell_width, index),
+            1,
+            self.board_cell_width,
+            self.board_cell_height,
+        ) {
+            if self.state[cell_cord_to_offset(self.board_cell_width, neighbor)] {
+                surrounding_mines += 1
+            }
+        }
+        return surrounding_mines;
+    }
 }
 
 /// Holds the information related to the current state of the game.
@@ -595,23 +758,11 @@ impl Game {
     }
 
     fn cell_cord_to_offset(&self, cord: CellCord) -> usize {
-        let x_offset = cord.0;
-        let y_offset = self.board_cell_width as usize * (cord.1);
-        let total_offset = x_offset + y_offset;
-        return total_offset;
+        cell_cord_to_offset(self.board_cell_width, cord)
     }
 
-    fn offset_to_cell_cord(&self, mut offset: usize) -> CellCord {
-        let mut cnt = 0;
-        while offset >= self.board_cell_width as usize {
-            offset = offset - self.board_cell_width as usize;
-            cnt += 1
-        }
-        let y = cnt;
-        let x = offset;
-        // y = int(Offset/self._width)
-        // x = int(Offset-y*self._width)
-        return CellCord(x, y);
+    fn offset_to_cell_cord(&self, offset: usize) -> CellCord {
+        offset_to_cell_cord(self.board_cell_width, offset)
     }
 
     // Convert cell based cordinate to actual pixel position.
@@ -661,12 +812,6 @@ impl Game {
 
         // Return the first cell type that matches the tile at the given cordinate.
         for (cell_image, cell_kind) in self.cell_images.iter().zip(all::<CellKind>()) {
-            // DEBUG
-            // save_image("test/Im2.png", DynamicImage::from(self.board_screenshot.clone()));
-
-            // DEBUG
-            // save_image("test/Im.png", DynamicImage::from(section_of_board.clone()));
-
             // See if it is a match.
             let is_match =
                 exact_image_match(&DynamicImage::from(cell_image.clone()), &section_of_board);
@@ -679,7 +824,11 @@ impl Game {
         }
 
         // If all cell images were matched and none worked.
-        println!("UNIDENTIFIED CELL at cord: {:?}", cord);
+        println!(
+            "UNIDENTIFIED CELL at cord: {:?}(offset: {:?})",
+            cord,
+            self.cell_cord_to_offset(cord)
+        );
         save_image("cell_images/Unidentified.png", section_of_board);
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
         self.save_state_info();
@@ -786,11 +935,11 @@ impl Game {
         return;
     }
 
-    /// Rule 1 implemented with sets. If the amount of bombs in a set is the same as the amount of cells in a set, they are all bombs.
+    /// Rule 1 implemented with sets. If the amount of mines in a set is the same as the amount of cells in a set, they are all mines.
     /// Returns a bool indicating whether the rule did something.
     fn cell_group_rule_1(&mut self, cell_group: &CellGroup) -> bool {
-        // If the number of bombs in the set is the same as the size of the set.
-        if cell_group.bomb_num as usize == cell_group.offsets.len() {
+        // If the number of mines in the set is the same as the size of the set.
+        if cell_group.mine_num as usize == cell_group.offsets.len() {
             // Flag all cells in set.
             for offset in cell_group.offsets.iter() {
                 self.flag(self.offset_to_cell_cord(*offset))
@@ -804,8 +953,8 @@ impl Game {
     }
 
     fn cell_group_rule_2(&mut self, cell_group: &CellGroup) -> bool {
-        // If set of cells has no bomb. (bomb_num is 0 from previous if)
-        if cell_group.bomb_num == 0 {
+        // If set of cells has no mine. (mine_num is 0 from previous if)
+        if cell_group.mine_num == 0 {
             // The reveals at the end might affect cells that have yet to be changed.
             for offset in cell_group.offsets.iter() {
                 // If a previous iteration of this loop didn't already reveal that cell, then reveal that cell.
@@ -842,11 +991,11 @@ impl Game {
             return None;
         }
 
-        // Set bomb num based on the cell's number.
+        // Set mine num based on the cell's number.
         if let Some(cell_value) = cell.kind.value() {
-            // The amount of bombs in the CellGroup is the amount there are around the cell minus how many have already been identified
-            let bomb_num = cell_value - flag_cnt;
-            return Some(CellGroup { offsets, bomb_num });
+            // The amount of mines in the CellGroup is the amount there are around the cell minus how many have already been identified
+            let mine_num = cell_value - flag_cnt;
+            return Some(CellGroup { offsets, mine_num });
         }
         // If the cell doesn't have a number then return nothing because non-numbered cells don't have associated CellGroup.
         else {
@@ -909,31 +1058,31 @@ impl Game {
                         // If the cell_group now contain a flag.
                         if self.state[offset] == CellKind::Flag {
                             // Remove the flag from the cell_group
-                            // and decrease the amount of bombs left.
+                            // and decrease the amount of mines left.
                             if !self.cell_groups[i].offsets.remove(&offset) {
                                 panic!(
                                     "Removed offset: {:?} that wasn't in cell_group: {:?}.",
                                     offset, self.cell_groups[i]
                                 )
                             };
-                            self.cell_groups[i].bomb_num -= 1;
                             if self.cell_groups[i].offsets.len()
-                                < self.cell_groups[i].bomb_num as usize
+                                < self.cell_groups[i].mine_num as usize - 1
                             {
-                                panic!("There are more bombs than places to put them. Removed offset: {:?} as it was a flag in in cell_group: {:?}.", offset, self.cell_groups[i]);
+                                panic!("There are more mines than places to put them. Removed offset: {:?} as it was a flag in in cell_group: {:?}.", offset, self.cell_groups[i]);
                             }
+                            self.cell_groups[i].mine_num -= 1;
                             did_something += 1;
                         }
-                        // If the cell_group now contains an not unexplored cell remove that cell as it can't be one of the bombs anymore.
+                        // If the cell_group now contains an not unexplored cell remove that cell as it can't be one of the mines anymore.
                         else if self.state[offset] != CellKind::Unexplored {
                             self.cell_groups[i].offsets.remove(&offset);
                             did_something += 1
                         }
                         // Below shouldn't be true ever and exists to detects errors.
-                        if self.cell_groups[i].bomb_num as usize > self.cell_groups[i].offsets.len()
+                        if self.cell_groups[i].mine_num as usize > self.cell_groups[i].offsets.len()
                         {
                             self.save_state_info();
-                            panic!("ERROR at self.cell_groups[{i}]={:?} has more bombs than cells to fill.",self.cell_groups[i]);
+                            panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill.",self.cell_groups[i]);
                         }
                     }
                     // TODO split to function END -----------------------------------------------------------------------------------------
@@ -977,57 +1126,57 @@ impl Game {
 
     fn enumerate_all_possible_arrangements(
         &self,
-        sub_group_bomb_num_lower_limit: usize,
-        sub_group_bomb_num_upper_limit: usize,
+        sub_group_mine_num_lower_limit: usize,
+        sub_group_mine_num_upper_limit: usize,
         sub_group_total_offsets_after_overlaps_removed: HashSet<usize>,
         sub_group: HashSet<&CellGroup>,
     ) -> (i32, HashMap<usize, i32>) {
         // DEBUG
         let sub_group_for_debug = sub_group.clone();
 
-        // Iterate through all possible amounts of bombs in the subgroup.
-        // Calculate odds as the amount of times a bomb appeared in a position divided by number of valid positions.
+        // Iterate through all possible amounts of mines in the subgroup.
+        // Calculate odds as the amount of times a mine appeared in a position divided by number of valid positions.
         // Division is done because comparison at the end will include other probabilities with different denominators.
-        // Holds how often a bomb occurs in each offset position.
-        let mut occurrences_of_bomb_per_offset: HashMap<_, _> =
+        // Holds how often a mine occurs in each offset position.
+        let mut occurrences_of_mine_per_offset: HashMap<_, _> =
             sub_group_total_offsets_after_overlaps_removed
                 .iter()
                 .map(|offset| (*offset, 0))
                 .collect();
         let mut number_of_valid_combinations = 0;
-        for sub_group_bomb_num in
-            0.max(sub_group_bomb_num_lower_limit)..(sub_group_bomb_num_upper_limit + 1)
+        for sub_group_mine_num in
+            0.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
         {
-            // Count up how many times a bomb occurs in each offset position.
+            // Count up how many times a mine occurs in each offset position.
             'combinations: for combination in sub_group_total_offsets_after_overlaps_removed
                 .iter()
-                .combinations(sub_group_bomb_num)
+                .combinations(sub_group_mine_num)
             {
-                // Verifies that the number of bombs in this combination is not invalid for each individual CellGroup
+                // Verifies that the number of mines in this combination is not invalid for each individual CellGroup
                 for cell_group in sub_group.iter() {
-                    // Stores how many bombs are in a CellGroup for this particular arrangement of bombs.
-                    let mut individual_cell_group_bomb_num_for_specific_combination = 0;
+                    // Stores how many mines are in a CellGroup for this particular arrangement of mines.
+                    let mut individual_cell_group_mine_num_for_specific_combination = 0;
                     // For every offset in CellGroup.
                     for offset in cell_group.offsets.iter() {
-                        // If the offset is a bomb.
+                        // If the offset is a mine.
                         if combination.contains(&&offset) {
-                            // Count up how many bombs are in the CellGroup for this arrangement.
-                            individual_cell_group_bomb_num_for_specific_combination += 1;
+                            // Count up how many mines are in the CellGroup for this arrangement.
+                            individual_cell_group_mine_num_for_specific_combination += 1;
                         }
                     }
-                    // If the amount of bombs isn't the right amount.
+                    // If the amount of mines isn't the right amount.
                     // Go to the next combination because this one doesn't work.
-                    if individual_cell_group_bomb_num_for_specific_combination
-                        != cell_group.bomb_num
+                    if individual_cell_group_mine_num_for_specific_combination
+                        != cell_group.mine_num
                     {
                         continue 'combinations;
                     }
                 }
-                // Since the amount of bombs is correct.
+                // Since the amount of mines is correct.
                 // For every offset in this valid combination.
-                // Increment the amount of bombs at each offset.
+                // Increment the amount of mines at each offset.
                 for offset in combination {
-                    *(occurrences_of_bomb_per_offset.get_mut(offset).unwrap()) += 1;
+                    *(occurrences_of_mine_per_offset.get_mut(offset).unwrap()) += 1;
                 }
 
                 // Since the arrangement is valid increment the number of valid arrangements.
@@ -1037,7 +1186,7 @@ impl Game {
         if number_of_valid_combinations == 0 {
             dbg!(sub_group_for_debug);
         }
-        return (number_of_valid_combinations, occurrences_of_bomb_per_offset);
+        return (number_of_valid_combinations, occurrences_of_mine_per_offset);
     }
 
     fn update_likelihoods_from_enumerated_arrangements(
@@ -1047,39 +1196,39 @@ impl Game {
         mut least_likely_positions: Vec<usize>,
         mut least_likelihood: f64,
         number_of_valid_combinations: i32,
-        occurrences_of_bomb_per_offset: HashMap<usize, i32>,
+        occurrences_of_mine_per_offset: HashMap<usize, i32>,
     ) -> Option<(Vec<usize>, f64, Vec<usize>, f64)> {
         // If there was a valid combination.
         if number_of_valid_combinations > 0
         // TODO remove next line I don't know why it is here.
-        // && occurrences_of_bomb_per_offset.values().max().unwrap() > &0
+        // && occurrences_of_mine_per_offset.values().max().unwrap() > &0
         {
             // Enumerate offsets and chances of those offsets.
-            for (offset, occurrence_of_bomb_at_offset) in occurrences_of_bomb_per_offset.iter() {
-                // The chance a bomb is somewhere is the amount of combinations a bomb occurred in that position divided by how many valid combinations there are total.
-                let chance_of_bomb_at_position: f64 =
-                    *occurrence_of_bomb_at_offset as f64 / number_of_valid_combinations as f64;
+            for (offset, occurrence_of_mine_at_offset) in occurrences_of_mine_per_offset.iter() {
+                // The chance a mine is somewhere is the amount of combinations a mine occurred in that position divided by how many valid combinations there are total.
+                let chance_of_mine_at_position: f64 =
+                    *occurrence_of_mine_at_offset as f64 / number_of_valid_combinations as f64;
 
-                if chance_of_bomb_at_position > most_likelihood {
-                    // If likelyhood of bomb is higher than previously recorded.
+                if chance_of_mine_at_position > most_likelihood {
+                    // If likelyhood of mine is higher than previously recorded.
                     // Update likelyhood
                     // and update position with highest likelyhood.
-                    most_likelihood = chance_of_bomb_at_position;
+                    most_likelihood = chance_of_mine_at_position;
                     most_likely_positions = vec![*offset];
                 }
-                // If the likelyhood is 100% then add it anyway because 100% means theres a bomb for sure and it should be flagged regardless.
-                else if chance_of_bomb_at_position == 1.0 {
-                    // update likelyhood and append position of garrunteed bomb.
+                // If the likelyhood is 100% then add it anyway because 100% means theres a mine for sure and it should be flagged regardless.
+                else if chance_of_mine_at_position == 1.0 {
+                    // update likelyhood and append position of garrunteed mine.
                     most_likelihood = 1.0;
                     most_likely_positions.push(*offset);
                 }
                 // Same thing but for leastlikelyhood.
-                if chance_of_bomb_at_position < least_likelihood {
-                    least_likelihood = chance_of_bomb_at_position;
+                if chance_of_mine_at_position < least_likelihood {
+                    least_likelihood = chance_of_mine_at_position;
                     least_likely_positions = vec![*offset];
                 }
-                // If the chance of a bomb is zero then it is guaranteed to not have a mine and should be revealed regardless.
-                else if chance_of_bomb_at_position == 0.0 {
+                // If the chance of a mine is zero then it is guaranteed to not have a mine and should be revealed regardless.
+                else if chance_of_mine_at_position == 0.0 {
                     least_likelihood = 0.0;
                     least_likely_positions.push(*offset);
                 }
@@ -1099,17 +1248,18 @@ impl Game {
     fn probabalistic_guess(&mut self) -> u32 {
         let mut did_something = 0;
 
-        // Keep track of the most and least likely places for there to be a bomb and the likelyhood of each.
+        // Keep track of the most and least likely places for there to be a mine and the likelyhood of each.
         let mut most_likely_positions = Vec::new();
         let mut most_likelihood = -1.0;
         let mut least_likely_positions = Vec::new();
         let mut least_likelihood = 101.0;
 
+        // TODO remove below
         // Get a vec of all the offsets so they can be merged in next step.
-        let mut offset_vec = Vec::with_capacity(self.cell_groups.len());
-        for cell_group in &self.cell_groups {
-            offset_vec.push(cell_group.offsets.clone());
-        }
+        // let mut offset_vec = Vec::with_capacity(self.cell_groups.len());
+        // for cell_group in &self.cell_groups {
+        //     offset_vec.push(cell_group.offsets.clone());
+        // }
 
         // Find the sub groups of the grid of interconnected cell_groups that are not related or interconnected.
         // Basically partitions board so parts that don't affect each other are handled separately to make the magnitudes of the combinations later on more managable.
@@ -1118,15 +1268,15 @@ impl Game {
         // For each independent sub group of cell_groups.
         for sub_group in sub_groups {
             let mut sub_group_total_offsets: Vec<usize> = Vec::new();
-            let mut sub_group_bomb_num_upper_limit_for_completely_unshared_bombs = 0;
+            let mut sub_group_mine_num_upper_limit_for_completely_unshared_mines = 0;
 
-            // Put all offsets of corresponding subgroup into a Vec. Also count how many bombs exist if there are no duplicates.
+            // Put all offsets of corresponding subgroup into a Vec. Also count how many mines exist if there are no duplicates.
             for cell_group in sub_group.iter() {
                 sub_group_total_offsets.extend(cell_group.offsets.clone());
 
-                // The upper limit on the number of bombs in a subgroup is if all the CellGroup share no bombs.
-                // This number is the sum total of simply adding each bomb_num.
-                sub_group_bomb_num_upper_limit_for_completely_unshared_bombs += cell_group.bomb_num;
+                // The upper limit on the number of mines in a subgroup is if all the CellGroup share no mines.
+                // This number is the sum total of simply adding each mine_num.
+                sub_group_mine_num_upper_limit_for_completely_unshared_mines += cell_group.mine_num;
             }
 
             // Save how many offsets with overlaps there are.
@@ -1140,45 +1290,45 @@ impl Game {
             let number_of_sub_group_total_offsets_after_overlaps_removed =
                 sub_group_total_offsets_after_overlaps_removed.len();
 
-            // An upper limit of bombs is if every intersection does not have a bomb.
-            // Another is the number of positions in the sub_group. It can't have more bombs than it has positions.
+            // An upper limit of mines is if every intersection does not have a mine.
+            // Another is the number of positions in the sub_group. It can't have more mines than it has positions.
             // Set upperlimit to the smaller upperlimit.
-            let sub_group_bomb_num_upper_limit =
+            let sub_group_mine_num_upper_limit =
                 number_of_sub_group_total_offsets_after_overlaps_removed
-                    .min(sub_group_bomb_num_upper_limit_for_completely_unshared_bombs as usize);
+                    .min(sub_group_mine_num_upper_limit_for_completely_unshared_mines as usize);
 
-            // The lower limit on bombs is if every intersection had a bomb.
-            // It is the same as upper limit (no bombs at intersections or number of places for a bomb to be) minus the number of intersections.
-            // This is because each intersection is another place where the bomb could have been double counted in the upper limit.
+            // The lower limit on mines is if every intersection had a mine.
+            // It is the same as upper limit (no mines at intersections or number of places for a mine to be) minus the number of intersections.
+            // This is because each intersection is another place where the mine could have been double counted in the upper limit.
             // Saturating subtraction because lower_limit can't be negative but the subtraction might if there are more overlaps than maximum upper limit.
-            let sub_group_bomb_num_lower_limit = sub_group_bomb_num_upper_limit.saturating_sub(
+            let sub_group_mine_num_lower_limit = sub_group_mine_num_upper_limit.saturating_sub(
                 number_of_subgroup_total_offsets_before_overlaps_removed
                     - number_of_sub_group_total_offsets_after_overlaps_removed,
             );
 
             // DEBUG
-            // dbg!(sub_group_bomb_num_upper_limit);
+            // dbg!(sub_group_mine_num_upper_limit);
             // dbg!(number_of_subgroup_total_offsets_before_overlaps_removed);
             // dbg!(number_of_sub_group_total_offsets_after_overlaps_removed);
 
             // Check that the amount of combinations will not exceed the global variable for the maximum combinations.
             // If it does this will take too long.
             let mut combination_total = 0;
-            // From the least to the most possible number of bombs.
-            for sub_group_bomb_num in
-                0.max(sub_group_bomb_num_lower_limit)..(sub_group_bomb_num_upper_limit + 1)
+            // From the least to the most possible number of mines.
+            for sub_group_mine_num in
+                0.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
             {
                 // Calculate the amount of combinations. Integer division means it might be off by one but that doesn't matter.
                 let combination_amount =
                     factorial(sub_group_total_offsets_after_overlaps_removed.len() as u64)
                         / (factorial(
                             sub_group_total_offsets_after_overlaps_removed.len() as u64
-                                - sub_group_bomb_num as u64,
-                        ) * factorial(sub_group_bomb_num as u64));
+                                - sub_group_mine_num as u64,
+                        ) * factorial(sub_group_mine_num as u64));
                 combination_total += combination_amount;
 
                 // DEBUG
-                // println!("{sub_group_total_offsets} with length {sub_group_total_offsets.len()} pick {sub_group_bomb_num} is {combination_amount} total combinations")
+                // println!("{sub_group_total_offsets} with length {sub_group_total_offsets.len()} pick {sub_group_mine_num} is {combination_amount} total combinations")
 
                 // If there are too many combinations then abort calculation.
                 if combination_total > MAX_COMBINATIONS {
@@ -1188,10 +1338,10 @@ impl Game {
                 }
             }
 
-            let (number_of_valid_combinations, occurrences_of_bomb_per_offset) = self
+            let (number_of_valid_combinations, occurrences_of_mine_per_offset) = self
                 .enumerate_all_possible_arrangements(
-                    sub_group_bomb_num_lower_limit,
-                    sub_group_bomb_num_upper_limit,
+                    sub_group_mine_num_lower_limit,
+                    sub_group_mine_num_upper_limit,
                     sub_group_total_offsets_after_overlaps_removed,
                     sub_group,
                 );
@@ -1207,24 +1357,24 @@ impl Game {
                 least_likely_positions,
                 least_likelihood,
                 number_of_valid_combinations,
-                occurrences_of_bomb_per_offset,
+                occurrences_of_mine_per_offset,
             ) {
                 Some(x) => x,
                 None => {
                     self.save_state_info();
-                    dbg!(sub_group_bomb_num_lower_limit);
-                    dbg!(sub_group_bomb_num_upper_limit);
+                    dbg!(sub_group_mine_num_lower_limit);
+                    dbg!(sub_group_mine_num_upper_limit);
                     panic!("There were no valid combinations!")
                 }
             };
         }
         // TODO make code below new function.
-        // If more certain about where a bomb isn't than where one is.
+        // If more certain about where a mine isn't than where one is.
         if most_likelihood <= 1.0 - least_likelihood {
-            // Then reveal all spots with lowest odds of bomb.
+            // Then reveal all spots with lowest odds of mine.
             for least_likely_position in least_likely_positions {
                 println!(
-                    "Revealing {:?} with odds {:?} of being bomb",
+                    "Revealing {:?} with odds {:?} of being mine",
                     self.offset_to_cell_cord(least_likely_position),
                     least_likelihood
                 );
@@ -1232,12 +1382,12 @@ impl Game {
             }
             did_something += 1;
         }
-        // If more certain about where a bomb is than where one isn't.
+        // If more certain about where a mine is than where one isn't.
         else if most_likelihood > 1.0 - least_likelihood {
-            // Then flag all spots with lowest odds of bomb.
+            // Then flag all spots with lowest odds of mine.
             for most_likely_position in most_likely_positions {
                 println!(
-                    "Flagging {:?} with odds {:?} of being bomb",
+                    "Flagging {:?} with odds {:?} of being mine",
                     self.offset_to_cell_cord(most_likely_position),
                     most_likelihood
                 );
@@ -1249,6 +1399,11 @@ impl Game {
     }
 
     pub fn solve(&mut self, initial_guess: CellCord) {
+        if initial_guess.0 > self.board_cell_width as usize {
+            panic!("Initial guess is larger than the board width.");
+        } else if initial_guess.1 > self.board_cell_height as usize {
+            panic!("Initial guess is larger than the board height.");
+        }
         // Reveal initial tile.
         self.reveal(initial_guess);
 
@@ -1363,67 +1518,6 @@ pub fn save_image(path: &str, image: DynamicImage) {
         image.width(),
         image.height(),
     );
-}
-
-struct Cell {
-    cord: CellCord,
-    kind: CellKind,
-}
-
-impl Cell {
-    // Returns cords of all neighbors that exist.
-    fn neighbors(
-        &self,
-        radius: usize,
-        board_cell_width: u32,
-        board_cell_height: u32,
-    ) -> Vec<CellCord> {
-        let mut neighbors = Vec::new();
-        // Goes from left to right and from top to bottom generating neighbor cords.
-        // Each radius increases number of cells in each dimension by 2 starting with 1 cell at radius = 0
-        for j in 0..2 * radius + 1 {
-            for i in 0..2 * radius + 1 {
-                // TODO check that usize doesn't overflow here for negative cords.
-                let x: i64 = self.cord.0 as i64 - radius as i64 + i as i64;
-                let y: i64 = self.cord.1 as i64 - radius as i64 + j as i64;
-                // Don't make neighbors with negative cords.
-                if x < 0 || y < 0 {
-                    continue;
-                }
-                // If neither is negative can safely convert to unsigned.
-                let x = x as usize;
-                let y = y as usize;
-
-                // Don't make neighbors with cords beyond the bounds of the board.
-                if x > board_cell_width as usize - 1 || y > board_cell_height as usize - 1 {
-                    continue;
-                }
-
-                // Don't add self to neighbor list.
-                if x == self.cord.0 && y == self.cord.1 {
-                    continue;
-                }
-
-                neighbors.push(CellCord(x, y));
-            }
-        }
-
-        return neighbors;
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CellGroup {
-    offsets: HashSet<usize>,
-    bomb_num: u32,
-}
-
-impl Hash for CellGroup {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        for offset in self.offsets.iter() {
-            offset.hash(state);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1581,11 +1675,11 @@ mod tests {
     fn remove_complete_cell_group_overlaps_test() {
         let cell_group_vec = vec![
             CellGroup {
-                bomb_num: 3,
+                mine_num: 3,
                 offsets: HashSet::from([1, 2, 3, 4, 5]),
             },
             CellGroup {
-                bomb_num: 2,
+                mine_num: 2,
                 offsets: HashSet::from([1, 2, 3, 4]),
             },
         ];
@@ -1594,11 +1688,11 @@ mod tests {
         assert!(result_bool);
         assert!(result_of_no_overlap.contains(&CellGroup {
             offsets: HashSet::from([4, 2, 1, 3]),
-            bomb_num: 2,
+            mine_num: 2,
         }));
         assert!(result_of_no_overlap.contains(&CellGroup {
             offsets: HashSet::from([5]),
-            bomb_num: 1,
+            mine_num: 1,
         }));
     }
 
@@ -1606,20 +1700,28 @@ mod tests {
     fn merge_overlapping_groups_test() {
         let cell1 = CellGroup {
             offsets: HashSet::from([1, 2]),
-            bomb_num: 1,
+            mine_num: 1,
         };
         let cell2 = CellGroup {
             offsets: HashSet::from([1, 2, 3]),
-            bomb_num: 2,
+            mine_num: 2,
         };
         let cell3 = CellGroup {
             offsets: HashSet::from([8, 9, 10]),
-            bomb_num: 2,
+            mine_num: 2,
         };
         let groups = vec![cell1.clone(), cell2.clone(), cell3.clone()];
         let output = merge_overlapping_groups(&groups);
         assert!(&output[0].contains(&cell1));
         assert!(&output[0].contains(&cell2));
         assert!(&output[1].contains(&cell3));
+    }
+
+    #[test]
+    fn test_simulation_creation() {
+        let sim = Simulation::new(4,5,6);
+        assert_eq!(sim.board_cell_width, 4);
+        assert_eq!(sim.board_cell_height, 5);
+        assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
     }
 }
