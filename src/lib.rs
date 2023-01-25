@@ -320,7 +320,10 @@ impl CellKind {
             7 => Ok(CellKind::Seven),
             8 => Ok(CellKind::Eight),
             0 => Ok(CellKind::Explored),
-            x => Err(Box::from(format!("Invalid input. Can't convert {} to a CellKind.", x))),
+            x => Err(Box::from(format!(
+                "Invalid input. Can't convert {} to a CellKind.",
+                x
+            ))),
         };
     }
 }
@@ -729,6 +732,36 @@ impl Game {
         return Game::build(cell_files, screenshot, capturer);
     }
 
+    pub fn new_for_simulation() -> Game {
+        let board_cell_width:u32 = 30;
+        let board_cell_height:u32 = 16;
+        let mine_num = 99;
+        let capturer = setup_capturer(0);
+        // Finds the initial positions of the cells in the game grid.
+        let board_screenshot = RgbImage::from_vec(0, 0, vec![]).unwrap();
+        // Initializes state as all unexplored.
+        let state = vec![CellKind::Unexplored; (board_cell_height * board_cell_width)as usize];
+        let simulation = Some(Simulation::new(board_cell_width, board_cell_height, mine_num));
+        Game {
+            simulation,
+            board_cell_height,
+            board_cell_width,
+            state,
+            frontier: Vec::new(),
+            cell_groups: Vec::new(),
+            // Below are all set to whatever (0 mostly) because they don't impact the simulation.
+            // They are primarily parameters of the screen and image of the board.
+            cell_positions: Vec::new(),
+            cell_images: Vec::new(),
+            board_px_height: 0,
+            board_px_width: 0,
+            capturer,
+            board_screenshot,
+            top_left: Point(0,0),
+            individual_cell_width: 0,
+            individual_cell_height: 0,
+        }
+    }
     /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
     fn get_board_screenshot_from_screen(&mut self) {
         let screenshot = capture_image_frame(&mut self.capturer);
@@ -949,7 +982,7 @@ impl Game {
                 .as_ref()
                 .expect("Simulation doesn't exist but function requires it does.")
                 .value(cell_cord_to_offset(self.board_cell_width, cord))
-                .unwrap(),
+                .expect(&format!("Revealed Mine at {cord:?}.").to_string()),
         )
     }
 
@@ -1515,6 +1548,9 @@ impl Game {
             // Reveal initial tile.
             self.reveal(initial_guess);
         }
+        else if simulate{
+            self.reveal_simulation(initial_guess);
+        }
 
         let mut did_something = 1;
         while did_something > 0 {
@@ -1832,5 +1868,13 @@ mod tests {
         assert_eq!(sim.board_cell_width, 4);
         assert_eq!(sim.board_cell_height, 5);
         assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
+    }
+
+    #[test]
+    fn simulate_solve() {
+        let mut game = Game::new_for_simulation();
+        game.solve(CellCord(0,0), true);
+        dbg!(game.state);
+
     }
 }
