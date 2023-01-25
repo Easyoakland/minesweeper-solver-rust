@@ -23,6 +23,6 @@ fn main(){
         0,
     );
 
-    game.solve(CellCord(0,0));
+    game.solve(CellCord(0,0), false);
     game.save_state_info();
 }

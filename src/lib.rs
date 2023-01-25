@@ -309,6 +309,20 @@ impl CellKind {
             CellKind::Explored => None,
         };
     }
+    fn value_to_cell_kind(value: u32) -> Result<CellKind, Box<dyn Error>> {
+        return match value {
+            1 => Ok(CellKind::One),
+            2 => Ok(CellKind::Two),
+            3 => Ok(CellKind::Three),
+            4 => Ok(CellKind::Four),
+            5 => Ok(CellKind::Five),
+            6 => Ok(CellKind::Six),
+            7 => Ok(CellKind::Seven),
+            8 => Ok(CellKind::Eight),
+            0 => Ok(CellKind::Explored),
+            x => Err(Box::from(format!("Invalid input. Can't convert {} to a CellKind.", x))),
+        };
+    }
 }
 
 /// Outputs an unordered vector. The vector is the result of merging all sets that share any item in common.
@@ -543,7 +557,7 @@ impl Simulation {
         // Generate random unique indexes until there are enough to represent each mine.
         let mut mine_pos: Vec<u32> = vec![];
         while mine_pos.len() != mine_num as usize {
-            let random_num = rand::random::<u32>() % (width*height);
+            let random_num = rand::random::<u32>() % (width * height);
             if !mine_pos.contains(&random_num) {
                 mine_pos.push(random_num);
             }
@@ -552,7 +566,7 @@ impl Simulation {
         // Make a state where each position is not a mine unless its index matches one of the mine positions.
         for h in 0..height {
             for w in 0..width {
-                state.push(mine_pos.contains(&(w * width + h)));
+                state.push(mine_pos.contains(&(h * width + w)));
             }
         }
         return Simulation {
@@ -561,10 +575,16 @@ impl Simulation {
             board_cell_height: height,
         };
     }
+
     pub fn is_mine(&self, index: usize) -> bool {
         return self.state[index];
     }
-    pub fn value(&self, index: usize) -> u32 {
+
+    /// Returns none if the item is a mine and otherwise returns how many mines are in the neighborhood.
+    pub fn value(&self, index: usize) -> Option<u32> {
+        if self.is_mine(index) {
+            return None;
+        }
         let mut surrounding_mines = 0;
         for neighbor in neighbors_of_cord(
             offset_to_cell_cord(self.board_cell_width, index),
@@ -576,7 +596,7 @@ impl Simulation {
                 surrounding_mines += 1
             }
         }
-        return surrounding_mines;
+        return Some(surrounding_mines);
     }
 }
 
@@ -597,6 +617,7 @@ pub struct Game {
     capturer: Capturer,
     frontier: Vec<Cell>,
     cell_groups: Vec<CellGroup>,
+    simulation: Option<Simulation>,
     /* board_screenshot_vec: Vec<u8>, */
 }
 
@@ -644,7 +665,7 @@ impl Game {
         let individual_cell_width = cell_images[9].width();
         let individual_cell_height = cell_images[9].height();
 
-        // Setting the bottom right requires finding hte top left of the last cell and shifting by the cell's width and height to get to the bottom right.
+        // Setting the bottom right requires finding the top left of the last cell and shifting by the cell's width and height to get to the bottom right.
         // let bottom_right = cell_positions
         //     .last()
         //     .expect("Will only fail if there is no game grid with cells");
@@ -695,6 +716,7 @@ impl Game {
             board_screenshot: screenshot, // Initially not cropped to just board. Will be when it is set using the correct method.
             frontier: Vec::new(),
             cell_groups: Vec::new(),
+            simulation: None,
             /* board_screenshot_vec: Vec::with_capacity((screenshot.width()*screenshot.height()) as usize) */
         };
     }
@@ -921,6 +943,63 @@ impl Game {
         self.update_state(cord);
     }
 
+    fn identify_cell_simulation(&self, cord: CellCord) -> Result<CellKind, Box<dyn Error>> {
+        CellKind::value_to_cell_kind(
+            self.simulation
+                .as_ref()
+                .expect("Simulation doesn't exist but function requires it does.")
+                .value(cell_cord_to_offset(self.board_cell_width, cord))
+                .unwrap(),
+        )
+    }
+
+    fn update_state_simulation(&mut self, cord: CellCord) {
+        // Only unexplored cells can update so don't bother checking if it wasn't an unexplored cell last time it was updated.
+        let cell_state_record = *(self.state_by_cell_cord(cord));
+        if cell_state_record != CellKind::Unexplored {
+            return;
+        }
+
+        // TODO Fix unwrap
+        let cell = Cell {
+            cord,
+            kind: self.identify_cell_simulation(cord).unwrap(),
+        };
+        // If cell state is different from recorded for that cell.
+        if cell.kind != cell_state_record {
+            // Then update state record for that cell.
+            *(self.state_by_cell_cord(cell.cord)) = cell.kind;
+            // If the cell is fully explored then check it's neighbors because it is not part of the frontier and neighbors may have also updated.
+            if cell.kind == CellKind::Explored {
+                // Update state of its neighbors.
+                for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
+                    self.update_state_simulation(neighbor)
+                }
+            }
+            // If it is a number and not a fully explored cell.
+            else if matches!(
+                cell.kind,
+                CellKind::One
+                    | CellKind::Two
+                    | CellKind::Three
+                    | CellKind::Four
+                    | CellKind::Five
+                    | CellKind::Six
+                    | CellKind::Seven
+                    | CellKind::Eight
+            ) {
+                // Add cell to frontier
+                self.frontier.push(cell)
+            }
+        }
+    }
+
+    fn reveal_simulation(&mut self, cord: CellCord) {
+        // TODO replace below unwrap. It should somehow indicate that a mine was revealed so game loss.
+        self.identify_cell_simulation(cord).unwrap();
+        self.update_state_simulation(cord);
+    }
+
     /// Flag cell at cord then update cell state at location to flag.
     fn flag(&mut self, cord: CellCord) {
         // Don't do anything if the cell isn't flaggable.
@@ -935,14 +1014,30 @@ impl Game {
         return;
     }
 
+    /// Flag cell at cord then update cell state at location to flag.
+    fn flag_simulation(&mut self, cord: CellCord) {
+        // Don't do anything if the cell isn't flaggable.
+        if *self.state_at_cord_imm(cord) != CellKind::Unexplored {
+            println!("Tried flagging a non flaggable at: {:#?}", cord);
+            return;
+        }
+        // Update the internal state of that cell to match.
+        *self.state_at_cord(cord) = CellKind::Flag;
+        return;
+    }
+
     /// Rule 1 implemented with sets. If the amount of mines in a set is the same as the amount of cells in a set, they are all mines.
     /// Returns a bool indicating whether the rule did something.
-    fn cell_group_rule_1(&mut self, cell_group: &CellGroup) -> bool {
+    fn cell_group_rule_1(&mut self, cell_group: &CellGroup, simulate: bool) -> bool {
         // If the number of mines in the set is the same as the size of the set.
         if cell_group.mine_num as usize == cell_group.offsets.len() {
             // Flag all cells in set.
             for offset in cell_group.offsets.iter() {
-                self.flag(self.offset_to_cell_cord(*offset))
+                if !simulate {
+                    self.flag(self.offset_to_cell_cord(*offset))
+                } else if simulate {
+                    self.flag_simulation(self.offset_to_cell_cord(*offset))
+                }
             }
             // Rule activated.
             return true;
@@ -952,14 +1047,18 @@ impl Game {
         }
     }
 
-    fn cell_group_rule_2(&mut self, cell_group: &CellGroup) -> bool {
+    fn cell_group_rule_2(&mut self, cell_group: &CellGroup, simulate: bool) -> bool {
         // If set of cells has no mine. (mine_num is 0 from previous if)
         if cell_group.mine_num == 0 {
             // The reveals at the end might affect cells that have yet to be changed.
             for offset in cell_group.offsets.iter() {
                 // If a previous iteration of this loop didn't already reveal that cell, then reveal that cell.
                 if self.state[*offset] == CellKind::Unexplored {
-                    self.reveal(self.offset_to_cell_cord(*offset));
+                    if !simulate {
+                        self.reveal(self.offset_to_cell_cord(*offset));
+                    } else if simulate {
+                        self.reveal_simulation(self.offset_to_cell_cord(*offset));
+                    }
                 }
             }
             return true; // Rule activated.
@@ -1003,7 +1102,7 @@ impl Game {
         }
     }
 
-    fn process_frontier(&mut self) {
+    fn process_frontier(&mut self, simulate: bool) {
         while self.frontier.len() > 0 {
             let current_cell = self
                 .frontier
@@ -1014,11 +1113,11 @@ impl Game {
             if let Some(cell_group) = cell_group {
                 // If rule 1 was able to do something currentCell.
                 // Then the rest of the loop is unnecessary.
-                if self.cell_group_rule_1(&cell_group) {
+                if self.cell_group_rule_1(&cell_group, simulate) {
                 }
                 // If rule 2 was able to do something to the currentCell.
                 // Then the rest of the loop is unnecessary.
-                else if self.cell_group_rule_2(&cell_group) {
+                else if self.cell_group_rule_2(&cell_group, simulate) {
                 }
                 // If neither rule could do something to the currentCell then add it to a list to apply more advanced techniques to later.
                 // Then add it to the list of cell_group.
@@ -1031,7 +1130,7 @@ impl Game {
 
     // Uses deterministic methods to solve the game.
     // TODO make processing frontier and CellGroup two separate functions.
-    fn deterministic_solve(&mut self) {
+    fn deterministic_solve(&mut self, simulate: bool) {
         // Makes outermost loop always execute at least once.
         let mut do_while_flag = true;
         // Loops through frontier and self.cell_groups.
@@ -1039,7 +1138,7 @@ impl Game {
         while do_while_flag || self.frontier.len() > 0 {
             do_while_flag = false;
             while self.frontier.len() > 0 {
-                self.process_frontier()
+                self.process_frontier(simulate);
             }
             // Set did_someting to 1 so self.cell_groups is processed at least once.
             let mut did_something = 1;
@@ -1091,14 +1190,14 @@ impl Game {
                     // Check if a logical operation can be done.
                     let cell_groups = self.cell_groups[i].clone();
 
-                    if self.cell_group_rule_1(&cell_groups) {
+                    if self.cell_group_rule_1(&cell_groups, simulate) {
                         // Since that cell_group is solved it is no longer needed.
                         self.cell_groups.swap_remove(i);
                         // Decrement loop index so this index is not skipped in next iteration now that a new value is in the index's position.
                         i = usize::saturating_sub(i, 1); // Saturate so a 0 index will terminate on next loop.
 
                         did_something += 1;
-                    } else if self.cell_group_rule_2(&cell_groups) {
+                    } else if self.cell_group_rule_2(&cell_groups, simulate) {
                         // Since that cell_group is solved it is no longer needed.
                         self.cell_groups.swap_remove(i);
 
@@ -1245,7 +1344,7 @@ impl Game {
     }
 
     /// Make best guess from all possibilities.
-    fn probabalistic_guess(&mut self) -> u32 {
+    fn probabalistic_guess(&mut self, simulate: bool) -> u32 {
         let mut did_something = 0;
 
         // Keep track of the most and least likely places for there to be a mine and the likelyhood of each.
@@ -1378,7 +1477,11 @@ impl Game {
                     self.offset_to_cell_cord(least_likely_position),
                     least_likelihood
                 );
-                self.reveal(self.offset_to_cell_cord(least_likely_position));
+                if !simulate {
+                    self.reveal(self.offset_to_cell_cord(least_likely_position));
+                } else if simulate {
+                    self.reveal_simulation(self.offset_to_cell_cord(least_likely_position))
+                }
             }
             did_something += 1;
         }
@@ -1391,31 +1494,37 @@ impl Game {
                     self.offset_to_cell_cord(most_likely_position),
                     most_likelihood
                 );
-                self.flag(self.offset_to_cell_cord(most_likely_position));
+                if !simulate {
+                    self.flag(self.offset_to_cell_cord(most_likely_position));
+                } else if simulate {
+                    self.flag_simulation(self.offset_to_cell_cord(most_likely_position));
+                }
                 did_something += 1;
             }
         }
         return did_something;
     }
 
-    pub fn solve(&mut self, initial_guess: CellCord) {
+    pub fn solve(&mut self, initial_guess: CellCord, simulate: bool) {
         if initial_guess.0 > self.board_cell_width as usize {
             panic!("Initial guess is larger than the board width.");
         } else if initial_guess.1 > self.board_cell_height as usize {
             panic!("Initial guess is larger than the board height.");
         }
-        // Reveal initial tile.
-        self.reveal(initial_guess);
+        if !simulate {
+            // Reveal initial tile.
+            self.reveal(initial_guess);
+        }
 
         let mut did_something = 1;
         while did_something > 0 {
             // Did something is set to 0 so the loop will only continue is something happens to change it.
             did_something = 0;
 
-            self.deterministic_solve();
+            self.deterministic_solve(simulate);
             if self.cell_groups.len() > 0 {
                 print!("Guess required. ");
-                if self.probabalistic_guess() >= 1 {
+                if self.probabalistic_guess(simulate) >= 1 {
                     did_something += 1;
                     continue;
                 }
@@ -1719,7 +1828,7 @@ mod tests {
 
     #[test]
     fn test_simulation_creation() {
-        let sim = Simulation::new(4,5,6);
+        let sim = Simulation::new(4, 5, 6);
         assert_eq!(sim.board_cell_width, 4);
         assert_eq!(sim.board_cell_height, 5);
         assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
