@@ -743,10 +743,12 @@ impl Game {
 
     /// Sets up the `Game` so that it can run a simulation of solving a real game.
     #[must_use]
-    pub fn new_for_simulation(initial_guess: CellCord) -> Game {
-        let board_cell_width: u32 = 30;
-        let board_cell_height: u32 = 16;
-        let mine_num = 99;
+    pub fn new_for_simulation(board_cell_width: u32, board_cell_height:u32, mine_num:u32, initial_guess: CellCord) -> Game {
+        // Expert mode has the following values:
+        // let width: u32 = 30;
+        // let height: u32 = 16;
+        // let mine_num = 99;
+
         // Finds the initial positions of the cells in the game grid.
         let board_screenshot = RgbImage::from_vec(0, 0, vec![]).unwrap();
         // Initializes state as all unexplored.
@@ -1450,8 +1452,8 @@ impl Game {
             let number_of_sub_group_total_offsets_after_overlaps_removed =
                 sub_group_total_offsets_after_overlaps_removed.len();
 
-            // An upper limit of mines is if every intersection does not have a mine.
-            // Another is the number of positions in the sub_group. It can't have more mines than it has positions.
+            // An upper limit of mines is the number of positions in the sub_group. It can't have more mines than it has positions.
+            // Another is if every intersection does not have a mine.
             // Set upperlimit to the smaller upperlimit.
             let sub_group_mine_num_upper_limit =
                 number_of_sub_group_total_offsets_after_overlaps_removed
@@ -1546,10 +1548,11 @@ impl Game {
                     self.offset_to_cell_cord(most_likely_position),
                     most_likelihood
                 );
+                let cord = self.offset_to_cell_cord(most_likely_position);
                 if !simulate {
-                    self.flag(self.offset_to_cell_cord(most_likely_position));
+                    self.flag(cord);
                 } else if simulate {
-                    self.flag_simulation(self.offset_to_cell_cord(most_likely_position));
+                    self.flag_simulation(cord);
                 }
                 did_something += 1;
             }
@@ -1582,6 +1585,11 @@ impl Game {
         while did_something > 0 || !self.action_stack.is_empty() {
             // Did something is set to 0 so the loop will only continue is something happens to change it.
             did_something = 0;
+
+            // Should always try deterministic solve at least once in case the previous guess made deterministic solving possible through a flag.
+            // If it did then there would be no new actions on the action_stack but there might be something new that can be done.
+            // At the very least deterministic solve will remove the now flagged location from all the `self.cell_groups`
+            self.deterministic_solve(simulate);
 
             while !self.action_stack.is_empty() {
                 // Loop will also continue if the state of the board is about to be updated and therefore there might be new moves.
@@ -1847,13 +1855,31 @@ mod tests {
         assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
     }
 
-    // TODO remove ignore after making more graceful handling of choosing a bomb in simulation.
+    // TODO remove ignore after making more graceful handling of choosing a mine in simulation.
     #[ignore]
     #[test]
     fn simulate_solve() {
-        let mut game = Game::new_for_simulation(CellCord(14, 7));
+        let mut game = Game::new_for_simulation(30,16,99,CellCord(14, 7));
         println!("{:?}", &game.simulation);
         game.solve(CellCord(14, 7), true);
         dbg!(game.state);
+    }
+
+    // Test to figure out why infinite `Tried flagging a non flaggable at` issue
+    // TODO remove ignore after making more graceful handling of choosing a mine in simulation.
+    #[ignore]
+    #[test]
+    fn simulate_infinite_flag_error() {
+        let mut game = Game::new_for_simulation(5,5,7,CellCord(0,0));
+        game.simulation = Some(Simulation::new(5, 5, 7, CellCord(0,0)));
+        game.simulation.as_mut().unwrap().state = vec![
+            false, false, true, true, false,
+            false, false, false, true, false,
+            false, false, false, false, false,
+            false, true, true, false, false,
+            false, false, true, true, false,
+        ];
+        game.solve(CellCord(0,0), true);
+        game.save_state_info("test/FinalGameState.csv")
     }
 }
