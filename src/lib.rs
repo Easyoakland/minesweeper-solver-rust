@@ -76,6 +76,22 @@ impl fmt::Display for GameError {
     }
 } */
 
+pub fn read_image(path: &str) -> DynamicImage {
+    return io::Reader::open(path)
+        .expect("Couldn't read image.")
+        .decode()
+        .expect("Unsupported Type");
+}
+
+pub fn save_image(path: &str, image: DynamicImage) {
+    save_rgb_vector(
+        path,
+        image.clone().into_rgb8().to_vec(),
+        image.width(),
+        image.height(),
+    );
+}
+
 /// Returns a capturer instance. Selects monitor based upon passed id. Zero indexed.
 pub fn setup_capturer(id: usize) -> Capturer {
     return Capturer::new(id).unwrap();
