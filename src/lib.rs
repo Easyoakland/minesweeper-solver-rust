@@ -8,7 +8,7 @@ use std::{
     error::Error,
     fmt,
     fs::OpenOptions,
-    hash::{Hash, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
     io::prelude::*,
     ops::{Add, Sub},
 };
@@ -17,7 +17,7 @@ use std::{
 // TODO change usize operations with checked_sub or checked_add etc..
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
-const MAX_COMBINATIONS: u64 = 2000000;
+const MAX_COMBINATIONS: u64 = 2_000_000;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Point(pub i32, pub i32);
@@ -82,7 +82,7 @@ pub fn read_image(path: &str) -> DynamicImage {
         .expect("Unsupported Type")
 }
 
-pub fn save_image(path: &str, image: DynamicImage) {
+pub fn save_image(path: &str, image: &DynamicImage) {
     save_rgb_vector(
         path,
         image.clone().into_rgb8().to_vec(),
@@ -92,8 +92,11 @@ pub fn save_image(path: &str, image: DynamicImage) {
 }
 
 /// Returns a capturer instance. Selects monitor based upon passed id. Zero indexed.
-pub fn setup_capturer(id: usize) -> Capturer {
-    Capturer::new(id).unwrap()
+/// Used primarily for benchmark.
+/// # Errors
+/// Returns the error that is given by underlying screen capture library.
+pub fn setup_capturer(id: usize) -> Result<Capturer, String> {
+    Capturer::new(id)
 }
 
 /// Returns a vector of concatenated RGB values corresponding to a captured frame.
@@ -109,7 +112,7 @@ fn capture_rgb_frame(capturer: &mut Capturer) -> Vec<u8> {
                     g,
                     b, /* a */
                     ..
-                } in frame.into_iter()
+                } in frame
                 {
                     rgb_vec.push(r);
                     rgb_vec.push(g);
@@ -128,7 +131,7 @@ fn capture_rgb_frame(capturer: &mut Capturer) -> Vec<u8> {
     }
 }
 
-/// Captures and returns a screenshot as RgbImage.
+/// Captures and returns a screenshot as `RgbImage`.
 pub fn capture_image_frame(capturer: &mut Capturer) -> RgbImage {
     RgbImage::from_raw(
         capturer.geometry().0,
@@ -159,44 +162,46 @@ pub fn save_rgb_vector(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
 
 /// Returns a vector containing the top left cordinate of each instance of the subimage found in the super image. Matches with rgb8.
 /// Should always find locations of the sub image in the order from left to right then top to bottom in the super image.
-pub fn locate_all(sup_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Point> {
-    let sup_image = sup_image.clone().into_rgb8(); // `.clone().into_rgb8()` is 13% faster on benchmark then `.to_rgb8()`. As approx as fast.as_rgb.unwrap() (maybe 1% faster) but can use all of RgbImage methods this way.
+/// # Panics
+/// Panic if `super_width` or `super_height` can't be converted to i32 because returned Point uses i32 type.
+pub fn locate_all(super_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Point> {
+    let super_image = super_image.clone().into_rgb8(); // `.clone().into_rgb8()` is 13% faster on benchmark then `.to_rgb8()`. As approx as fast.as_rgb.unwrap() (maybe 1% faster) but can use all of RgbImage methods this way.
     let sub_image = sub_image.clone().into_rgb8();
     let mut output = Vec::new();
 
     // Get dimensions of both images.
-    let (sup_width, sup_height) = (sup_image.width(), sup_image.height());
+    let (super_width, super_height) = (super_image.width(), super_image.height());
     let (sub_width, sub_height) = (sub_image.width(), sub_image.height());
 
     // Iterate through all positions of the sup_image checking if that region matches the sub_image when cropped to size.
-    let mut sub_sup_image = imageops::crop_imm(&sup_image, 0, 0, sub_width, sub_height);
-    'y_loop: for y in 0..sup_height {
-        'x_loop: for x in 0..sup_width {
+    let mut sub_super_image = imageops::crop_imm(&super_image, 0, 0, sub_width, sub_height);
+    'y_loop: for y in 0..super_height {
+        'x_loop: for x in 0..super_width {
             // Move sub image instead of creating a new one each iteration.
             // Approx 10% faster than using `let mut sub_sup_image = imageops::crop_imm(&sup_image, x, y, sub_width, sub_height);` each line
-            sub_sup_image.change_bounds(x, y, sub_width, sub_height);
+            sub_super_image.change_bounds(x, y, sub_width, sub_height);
 
             // Skip to next y line if no space left on this row for a sub image to fit.
-            if x + sub_width > sup_width {
+            if x + sub_width > super_width {
                 continue 'y_loop;
             }
             // Stop searching if no room for any more images.
-            if y + sub_height > sup_height {
+            if y + sub_height > super_height {
                 break 'y_loop;
             }
 
             // For each point if it doesn't match skip to next position.
-            for (sup_data, sub_data) in sub_sup_image
+            for (super_data, sub_data) in sub_super_image
                 .pixels()
                 .map(|(_x, _y, pixel)| pixel)
                 .zip(sub_image.pixels())
             {
-                if sub_data != &sup_data {
+                if sub_data != &super_data {
                     continue 'x_loop;
                 }
             }
 
-            output.push(Point(x as i32, y as i32));
+            output.push(Point(x.try_into().unwrap(), y.try_into().unwrap()));
         }
     }
     output
@@ -270,8 +275,8 @@ impl CellKind {
     /// `assert_eq!(CellKind::One.value(), 1);`
     ///
     /// `assert_eq!(CellKind::Eight.value(), 8);`
-    fn value(&self) -> Option<u32> {
-        match *self {
+    fn value(self) -> Option<u32> {
+        match self {
             CellKind::One => Some(1),
             CellKind::Two => Some(2),
             CellKind::Three => Some(3),
@@ -280,9 +285,7 @@ impl CellKind {
             CellKind::Six => Some(6),
             CellKind::Seven => Some(7),
             CellKind::Eight => Some(8),
-            CellKind::Flag => None,
-            CellKind::Unexplored => None,
-            CellKind::Explored => None,
+            CellKind::Flag | CellKind::Unexplored | CellKind::Explored => None,
         }
     }
     fn value_to_cell_kind(value: u32) -> Result<CellKind, Box<dyn Error>> {
@@ -297,7 +300,8 @@ impl CellKind {
             8 => Ok(CellKind::Eight),
             0 => Ok(CellKind::Explored),
             x => Err(Box::from(format!(
-                "Invalid input. Can't convert {x} to a CellKind."))),
+                "Invalid input. Can't convert {x} to a CellKind."
+            ))),
         };
     }
 }
@@ -330,18 +334,20 @@ impl CellKind {
 /// merge_overlapping_sets(Vec::from([HashSet::from(['a','b','c','d']), HashSet::from(['a','g']), HashSet::from(['e']), HashSet::from(['f','h']), HashSet::from(['k', 'a']), HashSet::from(['k', 'z'])])),
 /// vec![HashSet::from(['z', 'd', 'b', 'c', 'a', 'k', 'g']), HashSet::from(['e']), HashSet::from(['h', 'f'])]);
 /// ```
-pub fn merge_overlapping_sets<T>(sets: Vec<HashSet<T>>) -> Vec<HashSet<T>>
+pub fn merge_overlapping_sets<T, S: BuildHasher + Default>(
+    sets: Vec<HashSet<T, S>>,
+) -> Vec<HashSet<T, S>>
 where
     T: Eq + Hash + Clone,
 {
-    let mut merged_sets: Vec<HashSet<T>> = Vec::new();
+    let mut merged_sets: Vec<HashSet<T, S>> = Vec::new();
     for s in sets {
         let mut is_overlapping = false;
 
         for t in &mut merged_sets {
-            let intersection: HashSet<T> = s.intersection(t).cloned().collect();
+            let intersection: HashSet<T, S> = s.intersection(t).cloned().collect();
             if !intersection.is_empty() {
-                let union: HashSet<T> = s.union(t).cloned().collect();
+                let union: HashSet<T, S> = s.union(t).cloned().collect();
                 *t = union;
                 is_overlapping = true;
                 break;
@@ -352,7 +358,7 @@ where
             merged_sets.push(s);
         }
     }
-    let mut result: Vec<HashSet<T>> = Vec::new();
+    let mut result: Vec<HashSet<T, S>> = Vec::new();
     for set in merged_sets {
         let mut flag = true;
         for s in &result {
@@ -389,13 +395,13 @@ struct CellGroup {
 #[allow(clippy::derive_hash_xor_eq)]
 impl Hash for CellGroup {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        for offset in self.offsets.iter() {
+        for offset in &self.offsets {
             offset.hash(state);
         }
     }
 }
 
-/// Works like `merge_overlapping_sets` but for a Vec of CellGroup.
+/// Works like `merge_overlapping_sets` but for a `Vec` of `CellGroup`.
 fn merge_overlapping_groups<T>(groups: &Vec<CellGroup>) -> Vec<HashSet<&CellGroup>>
 where
     T: Eq + Hash + Clone,
@@ -409,7 +415,7 @@ where
             let intersection: HashSet<T> = group
                 .offsets
                 .intersection(&t.iter().next().unwrap().offsets)
-                .cloned()
+                .copied()
                 .collect();
             if !intersection.is_empty() {
                 t.insert(group);
@@ -476,7 +482,7 @@ fn offset_to_cell_cord(board_cell_width: u32, mut offset: usize) -> CellCord {
     let mut cnt = 0;
     while offset >= board_cell_width as usize {
         offset -= board_cell_width as usize;
-        cnt += 1
+        cnt += 1;
     }
     let y = cnt;
     let x = offset;
@@ -578,7 +584,7 @@ impl Simulation {
             self.board_cell_height,
         ) {
             if self.state[cell_cord_to_offset(self.board_cell_width, neighbor)] {
-                surrounding_mines += 1
+                surrounding_mines += 1;
             }
         }
         Some(surrounding_mines)
@@ -599,7 +605,7 @@ pub struct Game {
     individual_cell_width: u32,
     individual_cell_height: u32,
     board_screenshot: RgbImage,
-    capturer: Capturer,
+    capturer: Option<Capturer>,
     frontier: Vec<Cell>,
     cell_groups: Vec<CellGroup>,
     simulation: Option<Simulation>,
@@ -609,9 +615,10 @@ pub struct Game {
 
 impl Game {
     /// Creates a new game struct. Requires the input of the different cell type image file locations in order of CELL enum variants.
+    /// Specifically the order is `One,Two,Three,Four,Five,Six,Seven,Eight,Flag,Unexplored,Explored`
     /// # Panics
     /// - If the given files are not readable and decodable it panics.
-    /// - If a board is unable to be found it panics.
+    /// - If a board is unable to be found on screen it panics.
     pub fn build(
         cell_files: [&str; CELL_VARIANT_COUNT],
         screenshot: RgbImage,
@@ -619,7 +626,7 @@ impl Game {
     ) -> Game {
         // Reads in each cell image.
         let mut cell_images: Vec<RgbImage> = Vec::with_capacity(CELL_VARIANT_COUNT);
-        for file in cell_files.iter() {
+        for file in &cell_files {
             cell_images.push(
                 io::Reader::open(file)
                     .unwrap_or_else(|e| {
@@ -639,9 +646,10 @@ impl Game {
         );
 
         // If no grid was found then it is not possible to continue.
-        if cell_positions.is_empty() {
-            panic!("Unable to find board. Unable to continue.");
-        }
+        assert!(
+            !cell_positions.is_empty(),
+            "Unable to find board. Unable to continue."
+        );
 
         // Initializes state as all unexplored.
         let state = vec![CellKind::Unexplored; cell_positions.len()];
@@ -698,7 +706,7 @@ impl Game {
             // bottom_right,
             individual_cell_width,
             individual_cell_height,
-            capturer,
+            capturer: Some(capturer),
             board_screenshot: screenshot, // Initially not cropped to just board. Will be when it is set using the correct method.
             frontier: Vec::new(),
             cell_groups: Vec::new(),
@@ -708,17 +716,21 @@ impl Game {
         }
     }
 
+    /// Used as friendlier interface to `Game::build` function. Handles setting up screen capture.
+    /// # Panics
+    /// If can't setup screen capture.
     pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], id: usize) -> Game {
-        let mut capturer = setup_capturer(id);
+        let mut capturer = setup_capturer(id)
+            .unwrap_or_else(|e| panic!("Can't setup a screen capturer because: {e}."));
         let screenshot = capture_image_frame(&mut capturer);
         Game::build(cell_files, screenshot, capturer)
     }
 
+    /// Sets up the `Game` so that it can run a simulation of solving a real game.
     pub fn new_for_simulation(initial_guess: CellCord) -> Game {
         let board_cell_width: u32 = 30;
         let board_cell_height: u32 = 16;
         let mine_num = 99;
-        let capturer = setup_capturer(0);
         // Finds the initial positions of the cells in the game grid.
         let board_screenshot = RgbImage::from_vec(0, 0, vec![]).unwrap();
         // Initializes state as all unexplored.
@@ -743,7 +755,7 @@ impl Game {
             cell_images: Vec::new(),
             board_px_height: 0,
             board_px_width: 0,
-            capturer,
+            capturer: None,
             board_screenshot,
             top_left: Point(0, 0),
             individual_cell_width: 0,
@@ -752,7 +764,11 @@ impl Game {
     }
     /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
     fn get_board_screenshot_from_screen(&mut self) {
-        let screenshot = capture_image_frame(&mut self.capturer);
+        let screenshot = capture_image_frame(
+            self.capturer
+                .as_mut()
+                .expect("Tried getting a screenshot from the screen with no valid capturer."),
+        );
         self.board_screenshot = image::imageops::crop_imm(
             &screenshot,
             self.top_left.0 as u32,
@@ -824,7 +840,9 @@ impl Game {
         &self.state[offset]
     }
 
-    /// Don't use this. It is only public to do a benchmark.
+    /// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+    /// <strong>Warning:</strong> Don't use this. It is only public to do a benchmark.
+    /// </p>
     pub fn identify_cell_benchmark_pub_func(&mut self) {
         self.identify_cell(CellCord(4, 3)).unwrap();
     }
@@ -856,8 +874,10 @@ impl Game {
         // Return the first cell type that matches the tile at the given cordinate.
         for (cell_image, cell_kind) in self.cell_images.iter().zip(all::<CellKind>()) {
             // See if it is a match.
-            let is_match =
-                exact_image_match(&DynamicImage::from(cell_image.clone()), &sectioned_board_image);
+            let is_match = exact_image_match(
+                &DynamicImage::from(cell_image.clone()),
+                &sectioned_board_image,
+            );
 
             // If it is a match return that match and stop searching.
             if is_match {
@@ -872,9 +892,9 @@ impl Game {
             cord,
             self.cell_cord_to_offset(cord)
         );
-        save_image("cell_images/Unidentified.png", sectioned_board_image);
+        save_image("cell_images/Unidentified.png", &sectioned_board_image);
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
-        self.save_state_info();
+        self.save_state_info("test/FinalGameState.csv");
         Err(GameError("Can't identify the cell."))
     }
 
@@ -903,7 +923,7 @@ impl Game {
             if cell.kind == CellKind::Explored {
                 // Update state of its neighbors.
                 for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
-                    self.update_state(neighbor)
+                    self.update_state(neighbor);
                 }
             }
             // If it is a number and not a fully explored cell.
@@ -919,7 +939,7 @@ impl Game {
                     | CellKind::Eight
             ) {
                 // Add cell to frontier
-                self.frontier.push(cell)
+                self.frontier.push(cell);
             }
         }
     }
@@ -935,10 +955,8 @@ impl Game {
         // Only need to check tha the most recent clicked cell is now updated. When it is presumably the previously clicked cells will have also updated.
         // Next block will repeatedly check if the most recent cell is updated.
         if !simulate {
-            let cord = match self.action_stack.last() {
-                Some(x) => x,
-                None => return, // If empty nothing to process
-            };
+            // If empty nothing to process so return.
+            let Some(cord) = self.action_stack.last() else { return };
             let cord = *cord;
 
             let mut temp_cell_kind = CellKind::Unexplored;
@@ -946,11 +964,9 @@ impl Game {
             while temp_cell_kind == CellKind::Unexplored
             // This will keep looking for a change until one occurs.
             {
-                if i >= TIMEOUTS_ATTEMPTS_NUM
                 // If it must wait this many times give up because something is wrong.
-                {
-                    panic!("Board won't update. Game Loss?");
-                }
+                assert!(i < TIMEOUTS_ATTEMPTS_NUM, "Board won't update. Game Loss?");
+
                 self.get_board_screenshot_from_screen();
                 // TODO replace below unwrap with handling errors by saving the unknown image and quitting.
                 temp_cell_kind = self.identify_cell(cord).unwrap();
@@ -983,9 +999,9 @@ impl Game {
                 .pop()
                 .expect("While loop should prevent empty.");
             if !simulate {
-                self.update_state(cord)
+                self.update_state(cord);
             } else if simulate {
-                self.update_state_simulation(cord)
+                self.update_state_simulation(cord);
             };
         }
     }
@@ -1020,7 +1036,7 @@ impl Game {
             if cell.kind == CellKind::Explored {
                 // Update state of its neighbors.
                 for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
-                    self.update_state_simulation(neighbor)
+                    self.update_state_simulation(neighbor);
                 }
             }
             // If it is a number and not a fully explored cell.
@@ -1036,7 +1052,7 @@ impl Game {
                     | CellKind::Eight
             ) {
                 // Add cell to frontier
-                self.frontier.push(cell)
+                self.frontier.push(cell);
             }
         }
     }
@@ -1077,11 +1093,11 @@ impl Game {
         // If the number of mines in the set is the same as the size of the set.
         if cell_group.mine_num as usize == cell_group.offsets.len() {
             // Flag all cells in set.
-            for offset in cell_group.offsets.iter() {
+            for offset in &cell_group.offsets {
                 if !simulate {
-                    self.flag(self.offset_to_cell_cord(*offset))
+                    self.flag(self.offset_to_cell_cord(*offset));
                 } else if simulate {
-                    self.flag_simulation(self.offset_to_cell_cord(*offset))
+                    self.flag_simulation(self.offset_to_cell_cord(*offset));
                 }
             }
             // Rule activated.
@@ -1096,7 +1112,7 @@ impl Game {
         // If set of cells has no mine. (mine_num is 0 from previous if)
         if cell_group.mine_num == 0 {
             // The reveals at the end might affect cells that have yet to be changed.
-            for offset in cell_group.offsets.iter() {
+            for offset in &cell_group.offsets {
                 // If a previous iteration of this loop didn't already reveal that cell, then reveal that cell.
                 if self.state[*offset] == CellKind::Unexplored {
                     if !simulate {
@@ -1113,7 +1129,7 @@ impl Game {
     }
 
     // Generates a set for a given cell.
-    fn generate_cell_group(&self, cell: Cell) -> Option<CellGroup> {
+    fn generate_cell_group(&self, cell: &Cell) -> Option<CellGroup> {
         // Make a set for all locations given as an offset.
         let mut offsets = HashSet::new();
         let mut flag_cnt = 0;
@@ -1127,7 +1143,7 @@ impl Game {
             }
             // If the neighbor is a flag add to the count of surrounding flags.
             else if temp_state == CellKind::Flag {
-                flag_cnt += 1
+                flag_cnt += 1;
             }
         }
         // If set is empty don't return anything because there is no valid CellGroup
@@ -1153,14 +1169,16 @@ impl Game {
                 .frontier
                 .pop()
                 .expect("Already checked frontier length > 0.");
-            let cell_group = self.generate_cell_group(current_cell);
+            let cell_group = self.generate_cell_group(&current_cell);
 
             if let Some(cell_group) = cell_group {
                 // If rule 1 was able to do something currentCell.
                 // Then the rest of the loop is unnecessary.
                 // The short circuit comparison means the first rule to do something will terminate the comparison.
                 // Both rules should not be able to activate.
-                if self.cell_group_rule_1(&cell_group, simulate) || self.cell_group_rule_2(&cell_group, simulate){
+                if self.cell_group_rule_1(&cell_group, simulate)
+                    || self.cell_group_rule_2(&cell_group, simulate)
+                {
                 }
                 // If neither rule could do something to the currentCell then add it to a list to apply more advanced techniques to later.
                 // Then add it to the list of cell_group.
@@ -1197,34 +1215,34 @@ impl Game {
                 while i < self.cell_groups.len() {
                     // TODO split to function START -----------------------------------------------------------------------------------------
                     // Check to see if any cell_group now contain a flag or an already explored cell.
-                    for offset in self.cell_groups[i].offsets.clone().into_iter() {
+                    for offset in self.cell_groups[i].offsets.clone() {
                         // If the cell_group now contain a flag.
                         if self.state[offset] == CellKind::Flag {
-                            // Remove the flag from the cell_group
-                            // and decrease the amount of mines left.
-                            if !self.cell_groups[i].offsets.remove(&offset) {
-                                panic!(
-                                    "Removed offset: {:?} that wasn't in cell_group: {:?}.",
-                                    offset, self.cell_groups[i]
-                                )
-                            };
+                            // Remove the flag from the cell_group...
+                            assert!(
+                                self.cell_groups[i].offsets.remove(&offset),
+                                "Removed offset: {:?} that wasn't in cell_group: {:?}.",
+                                offset,
+                                self.cell_groups[i]
+                            );
                             if self.cell_groups[i].offsets.len()
                                 < self.cell_groups[i].mine_num as usize - 1
                             {
                                 panic!("There are more mines than places to put them. Removed offset: {:?} as it was a flag in in cell_group: {:?}.", offset, self.cell_groups[i]);
                             }
+                            // ...and decrease the amount of mines left.
                             self.cell_groups[i].mine_num -= 1;
                             did_something += 1;
                         }
                         // If the cell_group now contains an not unexplored cell remove that cell as it can't be one of the mines anymore.
                         else if self.state[offset] != CellKind::Unexplored {
                             self.cell_groups[i].offsets.remove(&offset);
-                            did_something += 1
+                            did_something += 1;
                         }
                         // Below shouldn't be true ever and exists to detects errors.
                         if self.cell_groups[i].mine_num as usize > self.cell_groups[i].offsets.len()
                         {
-                            self.save_state_info();
+                            self.save_state_info("test/FinalGameState.csv");
                             panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill.",self.cell_groups[i]);
                         }
                     }
@@ -1236,7 +1254,9 @@ impl Game {
 
                     // Short circuit because only one rule should be able to work at a time and saves computation.
                     // Also makes sure loop does one rule per iteration.
-                    if self.cell_group_rule_1(&cell_groups, simulate) || self.cell_group_rule_2(&cell_groups, simulate) {
+                    if self.cell_group_rule_1(&cell_groups, simulate)
+                        || self.cell_group_rule_2(&cell_groups, simulate)
+                    {
                         // Since that cell_group is solved it is no longer needed.
                         self.cell_groups.swap_remove(i);
                         // Decrement loop index so this index is not skipped in next iteration now that a new value is in the index's position.
@@ -1254,7 +1274,7 @@ impl Game {
                     (overlaps_existed, self.cell_groups) =
                         remove_complete_cell_group_overlaps(self.cell_groups.clone());
                     if overlaps_existed {
-                        did_something += 1
+                        did_something += 1;
                     }
                 }
             }
@@ -1262,11 +1282,10 @@ impl Game {
     }
 
     fn enumerate_all_possible_arrangements(
-        &self,
         sub_group_mine_num_lower_limit: usize,
         sub_group_mine_num_upper_limit: usize,
-        sub_group_total_offsets_after_overlaps_removed: HashSet<usize>,
-        sub_group: HashSet<&CellGroup>,
+        sub_group_total_offsets_after_overlaps_removed: &HashSet<usize>,
+        sub_group: &HashSet<&CellGroup>,
     ) -> (i32, HashMap<usize, i32>) {
         // Iterate through all possible amounts of mines in the subgroup.
         // Calculate odds as the amount of times a mine appeared in a position divided by number of valid positions.
@@ -1291,7 +1310,7 @@ impl Game {
                     // Stores how many mines are in a CellGroup for this particular arrangement of mines.
                     let mut individual_cell_group_mine_num_for_specific_combination = 0;
                     // For every offset in CellGroup.
-                    for offset in cell_group.offsets.iter() {
+                    for offset in &cell_group.offsets {
                         // If the offset is a mine.
                         if combination.contains(&offset) {
                             // Count up how many mines are in the CellGroup for this arrangement.
@@ -1314,20 +1333,19 @@ impl Game {
                 }
 
                 // Since the arrangement is valid increment the number of valid arrangements.
-                number_of_valid_combinations += 1
+                number_of_valid_combinations += 1;
             }
         }
         (number_of_valid_combinations, occurrences_of_mine_per_offset)
     }
 
     fn update_likelihoods_from_enumerated_arrangements(
-        &self,
         mut most_likely_positions: Vec<usize>,
         mut most_likelihood: f64,
         mut least_likely_positions: Vec<usize>,
         mut least_likelihood: f64,
         number_of_valid_combinations: i32,
-        occurrences_of_mine_per_offset: HashMap<usize, i32>,
+        occurrences_of_mine_per_offset: &HashMap<usize, i32>,
     ) -> Option<(Vec<usize>, f64, Vec<usize>, f64)> {
         // If there was a valid combination.
         if number_of_valid_combinations > 0
@@ -1337,8 +1355,8 @@ impl Game {
             // Enumerate offsets and chances of those offsets.
             for (offset, occurrence_of_mine_at_offset) in occurrences_of_mine_per_offset.iter() {
                 // The chance a mine is somewhere is the amount of combinations a mine occurred in that position divided by how many valid combinations there are total.
-                let chance_of_mine_at_position: f64 =
-                    *occurrence_of_mine_at_offset as f64 / number_of_valid_combinations as f64;
+                let chance_of_mine_at_position: f64 = f64::from(*occurrence_of_mine_at_offset)
+                    / f64::from(number_of_valid_combinations);
 
                 if chance_of_mine_at_position > most_likelihood {
                     // If likelyhood of mine is higher than previously recorded.
@@ -1348,7 +1366,8 @@ impl Game {
                     most_likely_positions = vec![*offset];
                 }
                 // If the likelyhood is 100% then add it anyway because 100% means theres a mine for sure and it should be flagged regardless.
-                else if chance_of_mine_at_position == 1.0 {
+                // It is better to miss 100% to floating point error than to generate an incorrect 100%.
+                else if f64::abs(chance_of_mine_at_position - 1.0) < f64::EPSILON {
                     // update likelyhood and append position of garrunteed mine.
                     most_likelihood = 1.0;
                     most_likely_positions.push(*offset);
@@ -1359,7 +1378,8 @@ impl Game {
                     least_likely_positions = vec![*offset];
                 }
                 // If the chance of a mine is zero then it is guaranteed to not have a mine and should be revealed regardless.
-                else if chance_of_mine_at_position == 0.0 {
+                // Better to miss actual 0% from floating point error than to generate incorrect 0%
+                else if chance_of_mine_at_position < f64::EPSILON {
                     least_likelihood = 0.0;
                     least_likely_positions.push(*offset);
                 }
@@ -1385,13 +1405,6 @@ impl Game {
         let mut least_likely_positions = Vec::new();
         let mut least_likelihood = 101.0;
 
-        // TODO remove below
-        // Get a vec of all the offsets so they can be merged in next step.
-        // let mut offset_vec = Vec::with_capacity(self.cell_groups.len());
-        // for cell_group in &self.cell_groups {
-        //     offset_vec.push(cell_group.offsets.clone());
-        // }
-
         // Find the sub groups of the grid of interconnected cell_groups that are not related or interconnected.
         // Basically partitions board so parts that don't affect each other are handled separately to make the magnitudes of the combinations later on more managable.
         let sub_groups = merge_overlapping_groups(&self.cell_groups);
@@ -1402,7 +1415,7 @@ impl Game {
             let mut sub_group_mine_num_upper_limit_for_completely_unshared_mines = 0;
 
             // Put all offsets of corresponding subgroup into a Vec. Also count how many mines exist if there are no duplicates.
-            for cell_group in sub_group.iter() {
+            for cell_group in &sub_group {
                 sub_group_total_offsets.extend(cell_group.offsets.clone());
 
                 // The upper limit on the number of mines in a subgroup is if all the CellGroup share no mines.
@@ -1461,36 +1474,35 @@ impl Game {
                 }
             }
 
-            let (number_of_valid_combinations, occurrences_of_mine_per_offset) = self
-                .enumerate_all_possible_arrangements(
+            let (number_of_valid_combinations, occurrences_of_mine_per_offset) =
+                Game::enumerate_all_possible_arrangements(
                     sub_group_mine_num_lower_limit,
                     sub_group_mine_num_upper_limit,
-                    sub_group_total_offsets_after_overlaps_removed,
-                    sub_group,
+                    &sub_group_total_offsets_after_overlaps_removed,
+                    &sub_group,
                 );
 
-            (
-                most_likely_positions,
-                most_likelihood,
-                least_likely_positions,
-                least_likelihood,
-            ) = match self.update_likelihoods_from_enumerated_arrangements(
+            let Some(x)  = Game::update_likelihoods_from_enumerated_arrangements(
                 most_likely_positions,
                 most_likelihood,
                 least_likely_positions,
                 least_likelihood,
                 number_of_valid_combinations,
-                occurrences_of_mine_per_offset,
-            ) {
-                Some(x) => x,
-                None => {
-                    self.save_state_info();
+                &occurrences_of_mine_per_offset,
+            ) else {
+                    self.save_state_info("test/FinalGameState.csv");
                     dbg!(sub_group_mine_num_lower_limit);
                     dbg!(sub_group_mine_num_upper_limit);
                     panic!("There were no valid combinations!")
-                }
-            };
+                };
+            (
+                most_likely_positions,
+                most_likelihood,
+                least_likely_positions,
+                least_likelihood,
+            ) = x;
         }
+
         // TODO make code below new function.
         // If more certain about where a mine isn't than where one is.
         if most_likelihood <= 1.0 - least_likelihood {
@@ -1504,7 +1516,7 @@ impl Game {
                 if !simulate {
                     self.reveal(self.offset_to_cell_cord(least_likely_position));
                 } else if simulate {
-                    self.reveal_simulation(self.offset_to_cell_cord(least_likely_position))
+                    self.reveal_simulation(self.offset_to_cell_cord(least_likely_position));
                 }
             }
             did_something += 1;
@@ -1529,12 +1541,14 @@ impl Game {
         did_something
     }
 
+    /// Solves the game. Take a boolean indicating whether it is a simulated game or not.
+    /// # Panics
+    /// Primarily panics if the given starting cordinate doesn't exist in the game.
+    /// Also panics if there is an internal bug in the code which is detected in one of the sub functions.
     pub fn solve(&mut self, initial_guess: CellCord, simulate: bool) {
-        if initial_guess.0 > self.board_cell_width as usize {
-            panic!("Initial guess is larger than the board width.");
-        } else if initial_guess.1 > self.board_cell_height as usize {
-            panic!("Initial guess is larger than the board height.");
-        }
+        assert!(initial_guess.0 <= self.board_cell_width as usize, "Initial guess is larger than the board width.");
+        assert!(initial_guess.1 <= self.board_cell_height as usize, "Initial guess is larger than the board height.");
+
         if !simulate {
             // Reveal initial tile.
             self.reveal(initial_guess);
@@ -1564,47 +1578,9 @@ impl Game {
     }
 
     /// Saves information about this Game to file for potential debugging purposes.
-    pub fn save_state_info(&self) {
-        // save saved game state as picture
-        // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
-
-        // Save game state as csv.
-        // Write create truncate can be set with `let log_file = File::create(&log_file_name).unwrap();` or as below.
-        // Write state to file after formatting nicely.
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open("test/FinalGameState.csv")
-            .unwrap();
-
-        for (i, cell) in self.state.iter().enumerate() {
-            let symbol_to_write = match cell {
-                CellKind::One => '1',
-                CellKind::Two => '2',
-                CellKind::Three => '3',
-                CellKind::Four => '4',
-                CellKind::Five => '5',
-                CellKind::Six => '6',
-                CellKind::Seven => '7',
-                CellKind::Eight => '8',
-                CellKind::Flag => 'F',
-                CellKind::Unexplored => 'U',
-                CellKind::Explored => 'E',
-            };
-            if let Err(e) = write!(file, "{symbol_to_write} ") {
-                eprintln!("Couldn't write to file: {e}");
-            }
-            if (i + 1) % self.board_cell_width as usize == 0 {
-                if let Err(e) = writeln!(file) {
-                    eprintln!("Couldn't write to file: {e}");
-                }
-            }
-        }
-    }
-
-    /// Saves information about this Game to file for potential debugging purposes.
-    pub fn save_state_info_with_path(&self, path: &str) {
+    /// # Panics
+    /// If it can't save to file path specified.
+    pub fn save_state_info(&self, path: &str) {
         // save saved game state as picture
         // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
 
@@ -1652,7 +1628,7 @@ mod tests {
     #[ignore]
     #[test]
     fn must_check_output_manually_record_screen_to_file() {
-        let mut capturer = setup_capturer(0);
+        let mut capturer = setup_capturer(0).expect("Could not get a valid capturer.");
         let (width, height) = capturer.geometry();
         for i in 0..=5 {
             let rgb_vec = capture_rgb_frame(&mut capturer);
@@ -1732,7 +1708,7 @@ mod tests {
         game.get_board_screenshot_from_screen();
         game.reveal(place_to_click);
 
-        game.save_state_info();
+        game.save_state_info("test/FinalGameState.csv");
         // First move always gives a fully unexplored cell.
         assert_eq!(*game.state_at_cord(place_to_click), CellKind::Explored);
     }
@@ -1783,7 +1759,7 @@ mod tests {
                 "cell_images/complete.png",
             ],
             read_image("test_in/subimage_search/board.png").to_rgb8(),
-            setup_capturer(0),
+            setup_capturer(0).expect("Could not get a valid capturer."),
         );
         assert_eq!(
             game.identify_cell(CellCord(3, 3)).unwrap(),
@@ -1849,11 +1825,12 @@ mod tests {
         assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
     }
 
+    // TODO remove ignore after making more graceful handling of choosing a bomb in simulation.
     #[ignore]
     #[test]
     fn simulate_solve() {
         let mut game = Game::new_for_simulation(CellCord(14, 7));
-        dbg!(&game.simulation);
+        println!("{:?}", &game.simulation);
         game.solve(CellCord(14, 7), true);
         dbg!(game.state);
     }

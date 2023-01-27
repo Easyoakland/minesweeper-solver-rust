@@ -24,5 +24,5 @@ fn main(){
     );
 
     game.solve(CellCord(0,0), false);
-    game.save_state_info();
+    game.save_state_info("test/FinalGameState.csv");
 }

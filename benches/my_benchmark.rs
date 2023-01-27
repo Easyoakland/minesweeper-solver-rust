@@ -58,7 +58,7 @@ fn test_identify_cell_benchmark(c: &mut Criterion) {
             "cell_images/complete.png",
         ],
         read_image("test_in/subimage_search/board.png").to_rgb8(),
-        setup_capturer(0),
+        setup_capturer(0).expect("Could not get a valid capturer."),
     );
     c.bench_function("identify cell on unexplored", |b| {
         b.iter(|| Game::identify_cell_benchmark_pub_func(black_box(&mut game)))
