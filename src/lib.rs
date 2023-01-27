@@ -249,7 +249,7 @@ fn exact_image_match(image1: &DynamicImage, image2: &DynamicImage) -> bool {
 
     // If they are the same dimension then locating all of either in the other will give one result if they are the same and 0 if different.
     let matches = locate_all(image1, image2);
-    if matches.len() == 0 {
+    if matches.is_empty() {
         return false;
     } else if matches.len() == 1 {
         return true;
@@ -570,14 +570,19 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(width: u32, height: u32, mine_num: u32) -> Simulation {
+    pub fn new(width: u32, height: u32, mine_num: u32, initial_guess: CellCord) -> Simulation {
         let mut state = Vec::with_capacity(width as usize * height as usize);
+        let neighbors = neighbors_of_cord(initial_guess, 1, width, height);
+        let initial_guess_offset = cell_cord_to_offset(width, initial_guess);
 
         // Generate random unique indexes until there are enough to represent each mine.
         let mut mine_pos: Vec<u32> = vec![];
         while mine_pos.len() != mine_num as usize {
             let random_num = rand::random::<u32>() % (width * height);
-            if !mine_pos.contains(&random_num) {
+            if !mine_pos.contains(&random_num)
+                && initial_guess_offset != random_num as usize
+                && !neighbors.contains(&offset_to_cell_cord(width, random_num as usize))
+            {
                 mine_pos.push(random_num);
             }
         }
@@ -637,7 +642,7 @@ pub struct Game {
     frontier: Vec<Cell>,
     cell_groups: Vec<CellGroup>,
     simulation: Option<Simulation>,
-    /* board_screenshot_vec: Vec<u8>, */
+    action_stack: Vec<CellCord>, /* board_screenshot_vec: Vec<u8>, */
 }
 
 impl Game {
@@ -672,7 +677,7 @@ impl Game {
         );
 
         // If no grid was found then it is not possible to continue.
-        if cell_positions.len() == 0 {
+        if cell_positions.is_empty() {
             panic!("Unable to find board. Unable to continue.");
         }
 
@@ -736,6 +741,7 @@ impl Game {
             frontier: Vec::new(),
             cell_groups: Vec::new(),
             simulation: None,
+            action_stack: Vec::new(),
             /* board_screenshot_vec: Vec::with_capacity((screenshot.width()*screenshot.height()) as usize) */
         };
     }
@@ -748,16 +754,21 @@ impl Game {
         return Game::build(cell_files, screenshot, capturer);
     }
 
-    pub fn new_for_simulation() -> Game {
-        let board_cell_width:u32 = 30;
-        let board_cell_height:u32 = 16;
+    pub fn new_for_simulation(initial_guess: CellCord) -> Game {
+        let board_cell_width: u32 = 30;
+        let board_cell_height: u32 = 16;
         let mine_num = 99;
         let capturer = setup_capturer(0);
         // Finds the initial positions of the cells in the game grid.
         let board_screenshot = RgbImage::from_vec(0, 0, vec![]).unwrap();
         // Initializes state as all unexplored.
-        let state = vec![CellKind::Unexplored; (board_cell_height * board_cell_width)as usize];
-        let simulation = Some(Simulation::new(board_cell_width, board_cell_height, mine_num));
+        let state = vec![CellKind::Unexplored; (board_cell_height * board_cell_width) as usize];
+        let simulation = Some(Simulation::new(
+            board_cell_width,
+            board_cell_height,
+            mine_num,
+            initial_guess,
+        ));
         Game {
             simulation,
             board_cell_height,
@@ -765,6 +776,7 @@ impl Game {
             state,
             frontier: Vec::new(),
             cell_groups: Vec::new(),
+            action_stack: Vec::new(),
             // Below are all set to whatever (0 mostly) because they don't impact the simulation.
             // They are primarily parameters of the screen and image of the board.
             cell_positions: Vec::new(),
@@ -773,7 +785,7 @@ impl Game {
             board_px_width: 0,
             capturer,
             board_screenshot,
-            top_left: Point(0,0),
+            top_left: Point(0, 0),
             individual_cell_width: 0,
             individual_cell_height: 0,
         }
@@ -954,42 +966,68 @@ impl Game {
 
     pub fn reveal(&mut self, cord: CellCord) {
         self.click_left_cell_cord(cord);
-        let mut temp_cell_kind = CellKind::Unexplored;
-        let mut i = 0;
-        while temp_cell_kind == CellKind::Unexplored
-        // This will keep looking for a change until one occurs.
-        {
-            if i >= TIMEOUTS_ATTEMPTS_NUM
-            // If it must wait this many times give up because something is wrong.
+
+        self.action_stack.push(cord);
+        // self.update_state(cord);
+    }
+
+    fn process_action_stack(&mut self, simulate: bool) {
+        // Only need to check tha the most recent clicked cell is now updated. When it is presumably the previously clicked cells will have also updated.
+        // Next block will repeatedly check if the most recent cell is updated.
+        if !simulate {
+            let cord = match self.action_stack.last() {
+                Some(x) => x,
+                None => return, // If empty nothing to process
+            };
+            let cord = cord.clone();
+
+            let mut temp_cell_kind = CellKind::Unexplored;
+            let mut i = 0;
+            while temp_cell_kind == CellKind::Unexplored
+            // This will keep looking for a change until one occurs.
             {
-                panic!("Board won't update. Game Loss?");
-            }
-            self.get_board_screenshot_from_screen();
-            // TODO replace below unwrap with handling errors by saving the unknown image and quitting.
-            temp_cell_kind = self.identify_cell(cord).unwrap();
-            // If the clicked cell looks like it is an unnumbered and explored cell then check that it's neighbors aren't unexplored.
-            // If they are any are unexplored then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
-            if temp_cell_kind == CellKind::Explored {
-                // Make a Cell Object for the clicked cell.
-                let clicked_cell = Cell {
-                    cord,
-                    kind: CellKind::Explored,
-                };
-                // Iterate through the neighbors of the clicked cell.
-                'neighbor_loop: for neighbor in
-                    clicked_cell.neighbors(1, self.board_cell_width, self.board_cell_height)
+                if i >= TIMEOUTS_ATTEMPTS_NUM
+                // If it must wait this many times give up because something is wrong.
                 {
-                    // TODO replace unwrap with handling of error by saving unknown image.
-                    if self.identify_cell(neighbor).unwrap() == CellKind::Unexplored {
-                        // If any neighbors are unexplored then this cell can't be a blank explored
-                        temp_cell_kind = CellKind::Unexplored; // set a so while loop will take a new screenshot;
-                        break 'neighbor_loop;
-                    }
+                    panic!("Board won't update. Game Loss?");
                 }
-                i += 1;
+                self.get_board_screenshot_from_screen();
+                // TODO replace below unwrap with handling errors by saving the unknown image and quitting.
+                temp_cell_kind = self.identify_cell(cord).unwrap();
+                // If the clicked cell looks like it is an unnumbered and explored cell then check that it's neighbors aren't unexplored.
+                // If they are any are unexplored then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
+                if temp_cell_kind == CellKind::Explored {
+                    // Make a Cell Object for the clicked cell.
+                    let clicked_cell = Cell {
+                        cord,
+                        kind: CellKind::Explored,
+                    };
+                    // Iterate through the neighbors of the clicked cell.
+                    'neighbor_loop: for neighbor in
+                        clicked_cell.neighbors(1, self.board_cell_width, self.board_cell_height)
+                    {
+                        // TODO replace unwrap with handling of error by saving unknown image.
+                        if self.identify_cell(neighbor).unwrap() == CellKind::Unexplored {
+                            // If any neighbors are unexplored then this cell can't be a blank explored
+                            temp_cell_kind = CellKind::Unexplored; // set a so while loop will take a new screenshot;
+                            break 'neighbor_loop;
+                        }
+                    }
+                    i += 1;
+                }
             }
         }
-        self.update_state(cord);
+        while !self.action_stack.is_empty() {
+            let cord = self
+                .action_stack
+                .pop()
+                .expect("While loop should prevent empty.");
+            if !simulate {
+                self.update_state(cord)
+            } else if simulate {
+                self.update_state_simulation(cord)
+            };
+        }
     }
 
     fn identify_cell_simulation(&self, cord: CellCord) -> Result<CellKind, Box<dyn Error>> {
@@ -1045,8 +1083,9 @@ impl Game {
 
     fn reveal_simulation(&mut self, cord: CellCord) {
         // TODO replace below unwrap. It should somehow indicate that a mine was revealed so game loss.
-        self.identify_cell_simulation(cord).unwrap();
-        self.update_state_simulation(cord);
+        // self.identify_cell_simulation(cord).unwrap();
+        // self.update_state_simulation(cord);
+        self.action_stack.push(cord);
     }
 
     /// Flag cell at cord then update cell state at location to flag.
@@ -1135,7 +1174,7 @@ impl Game {
             }
         }
         // If set is empty don't return anything because there is no valid CellGroup
-        if offsets.len() == 0 {
+        if offsets.is_empty() {
             return None;
         }
 
@@ -1152,7 +1191,7 @@ impl Game {
     }
 
     fn process_frontier(&mut self, simulate: bool) {
-        while self.frontier.len() > 0 {
+        while !self.frontier.is_empty() {
             let current_cell = self
                 .frontier
                 .pop()
@@ -1184,14 +1223,15 @@ impl Game {
         let mut do_while_flag = true;
         // Loops through frontier and self.cell_groups.
         // Continues looping until inner loop indicates self.cell_groups can't be processed anymore and outer loop indicates the frontier is empty.
-        while do_while_flag || self.frontier.len() > 0 {
+        while do_while_flag || !self.frontier.is_empty() {
             do_while_flag = false;
-            while self.frontier.len() > 0 {
+            while !self.frontier.is_empty() || !self.action_stack.is_empty() {
+                self.process_action_stack(simulate);
                 self.process_frontier(simulate);
             }
             // Set did_someting to 1 so self.cell_groups is processed at least once.
             let mut did_something = 1;
-            while did_something > 0 && self.cell_groups.len() > 0 {
+            while did_something > 0 && !self.cell_groups.is_empty() {
                 // Set flag to 0 so it will detect no changes as still being 0.
                 did_something = 0;
 
@@ -1563,18 +1603,21 @@ impl Game {
         if !simulate {
             // Reveal initial tile.
             self.reveal(initial_guess);
-        }
-        else if simulate{
+        } else if simulate {
             self.reveal_simulation(initial_guess);
         }
 
         let mut did_something = 1;
-        while did_something > 0 {
+        while did_something > 0 || !self.action_stack.is_empty() {
             // Did something is set to 0 so the loop will only continue is something happens to change it.
             did_something = 0;
 
-            self.deterministic_solve(simulate);
-            if self.cell_groups.len() > 0 {
+            while !self.action_stack.is_empty() {
+                // Loop will also continue if the state of the board is about to be updated and therefore there might be new moves.
+                self.process_action_stack(simulate);
+                self.deterministic_solve(simulate);
+            }
+            if !self.cell_groups.is_empty() {
                 print!("Guess required. ");
                 if self.probabalistic_guess(simulate) >= 1 {
                     did_something += 1;
@@ -1663,22 +1706,6 @@ impl Game {
             }
         }
     }
-}
-
-pub fn read_image(path: &str) -> DynamicImage {
-    return io::Reader::open(path)
-        .expect("Couldn't read image.")
-        .decode()
-        .expect("Unsupported Type");
-}
-
-pub fn save_image(path: &str, image: DynamicImage) {
-    save_rgb_vector(
-        path,
-        image.clone().into_rgb8().to_vec(),
-        image.width(),
-        image.height(),
-    );
 }
 
 #[cfg(test)]
@@ -1880,7 +1907,7 @@ mod tests {
 
     #[test]
     fn test_simulation_creation() {
-        let sim = Simulation::new(4, 5, 6);
+        let sim = Simulation::new(4, 5, 6, CellCord(0, 0));
         assert_eq!(sim.board_cell_width, 4);
         assert_eq!(sim.board_cell_height, 5);
         assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
@@ -1888,9 +1915,8 @@ mod tests {
 
     #[test]
     fn simulate_solve() {
-        let mut game = Game::new_for_simulation();
-        game.solve(CellCord(0,0), true);
+        let mut game = Game::new_for_simulation(CellCord(0, 0));
+        game.solve(CellCord(0, 0), true);
         dbg!(game.state);
-
     }
 }
