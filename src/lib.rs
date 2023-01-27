@@ -75,6 +75,11 @@ impl fmt::Display for GameError {
     }
 } */
 
+/// Returns a dynamic image at the given path.
+/// # Panics
+/// Panics if the image can't be read.
+/// Panics if the type of image is unsupported.
+#[must_use]
 pub fn read_image(path: &str) -> DynamicImage {
     io::Reader::open(path)
         .expect("Couldn't read image.")
@@ -164,6 +169,7 @@ pub fn save_rgb_vector(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
 /// Should always find locations of the sub image in the order from left to right then top to bottom in the super image.
 /// # Panics
 /// Panic if `super_width` or `super_height` can't be converted to i32 because returned Point uses i32 type.
+#[must_use]
 pub fn locate_all(super_image: &DynamicImage, sub_image: &DynamicImage) -> Vec<Point> {
     let super_image = super_image.clone().into_rgb8(); // `.clone().into_rgb8()` is 13% faster on benchmark then `.to_rgb8()`. As approx as fast.as_rgb.unwrap() (maybe 1% faster) but can use all of RgbImage methods this way.
     let sub_image = sub_image.clone().into_rgb8();
@@ -334,6 +340,7 @@ impl CellKind {
 /// merge_overlapping_sets(Vec::from([HashSet::from(['a','b','c','d']), HashSet::from(['a','g']), HashSet::from(['e']), HashSet::from(['f','h']), HashSet::from(['k', 'a']), HashSet::from(['k', 'z'])])),
 /// vec![HashSet::from(['z', 'd', 'b', 'c', 'a', 'k', 'g']), HashSet::from(['e']), HashSet::from(['h', 'f'])]);
 /// ```
+#[must_use]
 pub fn merge_overlapping_sets<T, S: BuildHasher + Default>(
     sets: Vec<HashSet<T, S>>,
 ) -> Vec<HashSet<T, S>>
@@ -380,6 +387,7 @@ where
 /// use minesweeper_solver_in_rust::factorial;
 /// assert_eq!(factorial(3), 6);
 /// ```
+#[must_use]
 pub fn factorial(n: u64) -> u64 {
     (2..(n + 1)).product()
 }
@@ -452,8 +460,8 @@ fn neighbors_of_cord(
                 continue;
             }
             // If neither is negative can safely convert to unsigned.
-            let x = x as usize;
-            let y = y as usize;
+            let x: usize = x.try_into().unwrap();
+            let y: usize = y.try_into().unwrap();
 
             // Don't make neighbors with cords beyond the bounds of the board.
             if x > board_cell_width as usize - 1 || y > board_cell_height as usize - 1 {
@@ -537,6 +545,7 @@ pub struct Simulation {
 }
 
 impl Simulation {
+    #[must_use]
     pub fn new(width: u32, height: u32, mine_num: u32, initial_guess: CellCord) -> Simulation {
         let mut state = Vec::with_capacity(width as usize * height as usize);
         let neighbors = neighbors_of_cord(initial_guess, 1, width, height);
@@ -567,11 +576,13 @@ impl Simulation {
         }
     }
 
+    #[must_use]
     pub fn is_mine(&self, index: usize) -> bool {
         self.state[index]
     }
 
     /// Returns none if the item is a mine and otherwise returns how many mines are in the neighborhood.
+    #[must_use]
     pub fn value(&self, index: usize) -> Option<u32> {
         if self.is_mine(index) {
             return None;
@@ -619,6 +630,7 @@ impl Game {
     /// # Panics
     /// - If the given files are not readable and decodable it panics.
     /// - If a board is unable to be found on screen it panics.
+    #[must_use]
     pub fn build(
         cell_files: [&str; CELL_VARIANT_COUNT],
         screenshot: RgbImage,
@@ -690,9 +702,11 @@ impl Game {
         }
 
         // The width in pixels is the number of cells times the width of each cell.
-        let px_width = (cell_width as u32) * cell_images[9].width();
+        let px_width =
+            <usize as TryInto<u32>>::try_into(cell_width).unwrap() * cell_images[9].width();
         // Same for height.
-        let px_height = (cell_height as u32) * cell_images[9].height();
+        let px_height =
+            <usize as TryInto<u32>>::try_into(cell_height).unwrap() * cell_images[9].height();
 
         Game {
             cell_images,
@@ -700,8 +714,8 @@ impl Game {
             cell_positions,
             board_px_width: px_width,
             board_px_height: px_height,
-            board_cell_width: cell_width as u32,
-            board_cell_height: cell_height as u32,
+            board_cell_width: cell_width.try_into().unwrap(),
+            board_cell_height: cell_width.try_into().unwrap(),
             top_left,
             // bottom_right,
             individual_cell_width,
@@ -719,6 +733,7 @@ impl Game {
     /// Used as friendlier interface to `Game::build` function. Handles setting up screen capture.
     /// # Panics
     /// If can't setup screen capture.
+    #[must_use]
     pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], id: usize) -> Game {
         let mut capturer = setup_capturer(id)
             .unwrap_or_else(|e| panic!("Can't setup a screen capturer because: {e}."));
@@ -727,6 +742,7 @@ impl Game {
     }
 
     /// Sets up the `Game` so that it can run a simulation of solving a real game.
+    #[must_use]
     pub fn new_for_simulation(initial_guess: CellCord) -> Game {
         let board_cell_width: u32 = 30;
         let board_cell_height: u32 = 16;
@@ -771,8 +787,8 @@ impl Game {
         );
         self.board_screenshot = image::imageops::crop_imm(
             &screenshot,
-            self.top_left.0 as u32,
-            self.top_left.1 as u32,
+            self.top_left.0.try_into().unwrap(),
+            self.top_left.1.try_into().unwrap(),
             self.board_px_width,
             self.board_px_height,
         )
@@ -861,8 +877,8 @@ impl Game {
         // Get section of the board that must be identified as a particular cell kind.
         let sectioned_board_image = imageops::crop_imm(
             &self.board_screenshot,
-            pos.0 as u32 - self.top_left.0 as u32,
-            pos.1 as u32 - self.top_left.1 as u32,
+            TryInto::<u32>::try_into(pos.0).unwrap() - TryInto::<u32>::try_into(self.top_left.0).unwrap(),
+            TryInto::<u32>::try_into(pos.1).unwrap() - TryInto::<u32>::try_into(self.top_left.1).unwrap(),
             self.individual_cell_width,
             self.individual_cell_height,
         );
@@ -1546,8 +1562,14 @@ impl Game {
     /// Primarily panics if the given starting cordinate doesn't exist in the game.
     /// Also panics if there is an internal bug in the code which is detected in one of the sub functions.
     pub fn solve(&mut self, initial_guess: CellCord, simulate: bool) {
-        assert!(initial_guess.0 <= self.board_cell_width as usize, "Initial guess is larger than the board width.");
-        assert!(initial_guess.1 <= self.board_cell_height as usize, "Initial guess is larger than the board height.");
+        assert!(
+            initial_guess.0 <= self.board_cell_width as usize,
+            "Initial guess is larger than the board width."
+        );
+        assert!(
+            initial_guess.1 <= self.board_cell_height as usize,
+            "Initial guess is larger than the board height."
+        );
 
         if !simulate {
             // Reveal initial tile.
