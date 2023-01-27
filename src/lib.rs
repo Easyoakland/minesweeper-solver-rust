@@ -1619,6 +1619,7 @@ impl Game {
             }
             if !self.cell_groups.is_empty() {
                 print!("Guess required. ");
+                self.process_action_stack(simulate);
                 if self.probabalistic_guess(simulate) >= 1 {
                     did_something += 1;
                     continue;
