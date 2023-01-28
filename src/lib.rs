@@ -715,7 +715,7 @@ impl Game {
             board_px_width: px_width,
             board_px_height: px_height,
             board_cell_width: cell_width.try_into().unwrap(),
-            board_cell_height: cell_width.try_into().unwrap(),
+            board_cell_height: cell_height.try_into().unwrap(),
             top_left,
             // bottom_right,
             individual_cell_width,
