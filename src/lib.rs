@@ -13,9 +13,6 @@ use std::{
     ops::{Add, Sub},
 };
 
-// TODO replace "as usize" with .try_into().unwrap()
-// TODO change usize operations with checked_sub or checked_add etc..
-
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
 const MAX_COMBINATIONS: u64 = 2_000_000;
 
@@ -68,12 +65,6 @@ impl fmt::Display for GameError {
         write!(f, "{}", self.0)
     }
 }
-
-/* impl fmt::Debug for GameError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{{ file: {}, line: {} }}", file!(), line!())
-    }
-} */
 
 /// Returns a dynamic image at the given path.
 /// # Panics
@@ -499,27 +490,6 @@ fn offset_to_cell_cord(board_cell_width: u32, mut offset: usize) -> CellCord {
     CellCord(x, y)
 }
 
-/* fn neighbors_of_offset(
-    mut offset: usize,
-    radius: usize,
-    board_cell_width: u32,
-    board_cell_height: u32,
-) -> Vec<CellCord> {
-    let cord = {
-        let mut cnt = 0;
-        while offset >= board_cell_width as usize {
-            offset = offset - board_cell_width as usize;
-            cnt += 1
-        }
-        let y = cnt;
-        let x = offset;
-        // y = int(Offset/self._width)
-        // x = int(Offset-y*self._width)
-        CellCord(x, y)
-    };
-    return neighbors_of_cord(cord, radius, board_cell_width, board_cell_height);
-} */
-
 struct Cell {
     cord: CellCord,
     kind: CellKind,
@@ -671,16 +641,6 @@ impl Game {
         let individual_cell_width = cell_images[9].width();
         let individual_cell_height = cell_images[9].height();
 
-        // Setting the bottom right requires finding the top left of the last cell and shifting by the cell's width and height to get to the bottom right.
-        // let bottom_right = cell_positions
-        //     .last()
-        //     .expect("Will only fail if there is no game grid with cells");
-        // let offset_from_top_left_corner_to_bottom_right_corner_of_cell =
-        //     Point(individual_cell_width as i32, individual_cell_height as i32);
-        // Update bottom_right by offset to go from top left to bottom right of last cell.
-        // let bottom_right =
-        //     *bottom_right + offset_from_top_left_corner_to_bottom_right_corner_of_cell;
-
         let mut biggest: i32 = 0; // Temp variable for holding the largest position in the following iterations.
         let mut cell_width = 0;
         // Set the width by counting how many cells into cell_positions the highest x value is.
@@ -717,7 +677,6 @@ impl Game {
             board_cell_width: cell_width.try_into().unwrap(),
             board_cell_height: cell_height.try_into().unwrap(),
             top_left,
-            // bottom_right,
             individual_cell_width,
             individual_cell_height,
             capturer: Some(capturer),
@@ -726,7 +685,6 @@ impl Game {
             cell_groups: Vec::new(),
             simulation: None,
             action_stack: Vec::new(),
-            /* board_screenshot_vec: Vec::with_capacity((screenshot.width()*screenshot.height()) as usize) */
         }
     }
 
@@ -796,21 +754,6 @@ impl Game {
         )
         .to_image();
     }
-
-    /*     /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
-    fn get_board_screenshot_from_screen_in_place(&mut self) {
-        capture_image_frame_in_place(&mut self.capturer, &mut self.board_screenshot_vec);
-        let (width,height) = self.capturer.geometry();
-        let screenshot = RgbImage::from_vec(width, height, self.board_screenshot_vec).expect("Failed to convert vector to RGBImage");
-        self.board_screenshot = image::imageops::crop_imm(
-            &screenshot,
-            self.top_left.0 as u32,
-            self.top_left.1 as u32,
-            self.board_px_width,
-            self.board_px_height,
-        )
-        .to_image();
-    } */
 
     /// Left clicks indicated cord
     fn click_left_cell_cord(&self, cord: CellCord) {
