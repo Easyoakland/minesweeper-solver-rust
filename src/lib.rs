@@ -716,9 +716,11 @@ impl Game {
     /// Sets up the `Game` so that it can run a simulation of solving a real game.
     ///
     /// Expert mode has the following values:
-    /// let width: u32 = 30;
-    /// let height: u32 = 16;
+    /// ```
+    /// let board_cell_width: u32 = 30;
+    /// let board_cell_height: u32 = 16;
     /// let mine_num = 99;
+    /// ```
     #[allow(clippy::missing_panics_doc)] // Uses unwrap that will never panic.
     #[must_use]
     pub fn new_for_simulation(
@@ -1076,10 +1078,8 @@ impl Game {
     /// Flag cell at cord then update cell state at location to flag.
     fn flag_simulation(&mut self, cord: CellCord) {
         // Don't do anything if the cell isn't flaggable.
-        if *self.state_at_cord_imm(cord) != CellKind::Unexplored {
-            if LOGGING {
+        if LOGGING && *self.state_at_cord_imm(cord) != CellKind::Unexplored {
                 println!("Tried flagging a non flaggable at: {cord:#?}");
-            }
         }
         // Update the internal state of that cell to match.
         *self.state_at_cord(cord) = CellKind::Flag;
@@ -1663,7 +1663,7 @@ impl Game {
                     None => 'F',
                     Some(c) => match c {
                         0 => 'E',
-                        1..=8 => char::from_digit(c.clone(), 10).unwrap(),
+                        1..=8 => char::from_digit(c, 10).unwrap(),
                         _ => panic!("c was {c} which is not a valid amount of mines."),
                     },
                 };
