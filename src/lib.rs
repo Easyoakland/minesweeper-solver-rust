@@ -61,6 +61,7 @@ impl Sub for CellCord {
 pub enum GameError {
     RevealedMine(CellCord),
     UnidentifiedCell(CellCord),
+    Unfinished,
 }
 
 impl Error for GameError {}
@@ -70,6 +71,7 @@ impl fmt::Display for GameError {
         match self {
             Self::RevealedMine(x) => write!(f, "Revealed a mine at {x:?}."),
             Self::UnidentifiedCell(x) => write!(f, "Can't identify cell at {x:?}"),
+            Self::Unfinished => write!(f, "The game was unable to be finished for an unknown reason.")
         }
     }
 }
@@ -1576,7 +1578,14 @@ impl Game {
                 }
             }
         }
-        Ok(())
+
+        // If the game still contains unexplored cells it was fully solved.
+        if self.state.iter().contains(&CellKind::Unexplored) {
+            Err(GameError::Unfinished)
+        }
+        else {
+            Ok(())
+        }
     }
 
     /// Saves information about this Game to file for potential debugging purposes.
