@@ -1079,7 +1079,7 @@ impl Game {
     fn flag_simulation(&mut self, cord: CellCord) {
         // Don't do anything if the cell isn't flaggable.
         if LOGGING && *self.state_at_cord_imm(cord) != CellKind::Unexplored {
-                println!("Tried flagging a non flaggable at: {cord:#?}");
+            println!("Tried flagging a non flaggable at: {cord:#?}");
         }
         // Update the internal state of that cell to match.
         *self.state_at_cord(cord) = CellKind::Flag;
@@ -1239,11 +1239,12 @@ impl Game {
                             self.cell_groups[i].offsets.remove(&offset);
                             did_something += 1;
                         }
+
                         // Below shouldn't be true ever and exists to detects errors.
                         if self.cell_groups[i].mine_num as usize > self.cell_groups[i].offsets.len()
                         {
                             self.save_state_info("test/FinalGameState.csv", simulate);
-                            panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill.",self.cell_groups[i]);
+                            panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill. Just removed {offset}",self.cell_groups[i]);
                         }
                     }
                     // TODO split to function END -----------------------------------------------------------------------------------------
@@ -1676,6 +1677,14 @@ impl Game {
                     }
                 }
             }
+        }
+
+        // Separate with space
+        if let Err(e) = writeln!(file) {
+            eprintln!("Couldn't write to file: {e}");
+        }
+        if let Err(e) = write!(file, "{:#?}", self.cell_groups) {
+            eprintln!("Couldn't write to file: {e}");
         }
     }
 }
