@@ -15,6 +15,7 @@ use std::{
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
 const MAX_COMBINATIONS: u64 = 2_000_000;
+const LOGGING: bool = false;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Point(pub i32, pub i32);
@@ -71,7 +72,10 @@ impl fmt::Display for GameError {
         match self {
             Self::RevealedMine(x) => write!(f, "Revealed a mine at {x:?}."),
             Self::UnidentifiedCell(x) => write!(f, "Can't identify cell at {x:?}"),
-            Self::Unfinished => write!(f, "The game was unable to be finished for an unknown reason.")
+            Self::Unfinished => write!(
+                f,
+                "The game was unable to be finished for an unknown reason."
+            ),
         }
     }
 }
@@ -710,6 +714,11 @@ impl Game {
     }
 
     /// Sets up the `Game` so that it can run a simulation of solving a real game.
+    ///
+    /// Expert mode has the following values:
+    /// let width: u32 = 30;
+    /// let height: u32 = 16;
+    /// let mine_num = 99;
     #[allow(clippy::missing_panics_doc)] // Uses unwrap that will never panic.
     #[must_use]
     pub fn new_for_simulation(
@@ -718,11 +727,6 @@ impl Game {
         mine_num: u32,
         initial_guess: CellCord,
     ) -> Game {
-        // Expert mode has the following values:
-        // let width: u32 = 30;
-        // let height: u32 = 16;
-        // let mine_num = 99;
-
         // Finds the initial positions of the cells in the game grid.
         let board_screenshot = RgbImage::from_vec(0, 0, vec![]).unwrap();
         // Initializes state as all unexplored.
@@ -869,14 +873,16 @@ impl Game {
         }
 
         // If all cell images were matched and none worked.
-        println!(
-            "UNIDENTIFIED CELL at cord: {:?}(offset: {:?})",
-            cord,
-            self.cell_cord_to_offset(cord)
-        );
+        if LOGGING {
+            println!(
+                "UNIDENTIFIED CELL at cord: {:?}(offset: {:?})",
+                cord,
+                self.cell_cord_to_offset(cord)
+            );
+        }
         save_image("cell_images/Unidentified.png", &sectioned_board_image);
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
-        self.save_state_info("test/FinalGameState.csv");
+        self.save_state_info("test/FinalGameState.csv", false);
         Err(GameError::UnidentifiedCell(cord))
     }
 
@@ -1056,7 +1062,9 @@ impl Game {
     fn flag(&mut self, cord: CellCord) {
         // Don't do anything if the cell isn't flaggable.
         if *self.state_at_cord_imm(cord) != CellKind::Unexplored {
-            println!("Tried flagging a non flaggable at: {cord:#?}");
+            if LOGGING {
+                println!("Tried flagging a non flaggable at: {cord:#?}");
+            }
             return;
         }
         // Since the cell is flaggable flag it...
@@ -1069,7 +1077,9 @@ impl Game {
     fn flag_simulation(&mut self, cord: CellCord) {
         // Don't do anything if the cell isn't flaggable.
         if *self.state_at_cord_imm(cord) != CellKind::Unexplored {
-            println!("Tried flagging a non flaggable at: {cord:#?}");
+            if LOGGING {
+                println!("Tried flagging a non flaggable at: {cord:#?}");
+            }
         }
         // Update the internal state of that cell to match.
         *self.state_at_cord(cord) = CellKind::Flag;
@@ -1142,7 +1152,8 @@ impl Game {
         // Set mine num based on the cell's number.
         if let Some(cell_value) = cell.kind.value() {
             // The amount of mines in the CellGroup is the amount there are around the cell minus how many have already been identified
-            let mine_num = cell_value - flag_cnt;
+            // TODO check that having no mines makes sense if more flags around cell then should be do to bad previous guess.
+            let mine_num = cell_value.saturating_sub(flag_cnt);
             Some(CellGroup { offsets, mine_num })
         }
         // If the cell doesn't have a number then return nothing because non-numbered cells don't have associated CellGroup.
@@ -1213,10 +1224,11 @@ impl Game {
                                 offset,
                                 self.cell_groups[i]
                             );
+                            // TODO below has a subtract with overflow issue sometimes.
                             if self.cell_groups[i].offsets.len()
-                                < self.cell_groups[i].mine_num as usize - 1
+                                < (self.cell_groups[i].mine_num as usize) - 1
                             {
-                                panic!("There are more mines than places to put them. Removed offset: {:?} as it was a flag in in cell_group: {:?}.", offset, self.cell_groups[i]);
+                                panic!("There are more mines than places to put them. Removed offset: {:?} as it was a flag in cell_group: {:?}.", offset, self.cell_groups[i]);
                             }
                             // ...and decrease the amount of mines left.
                             self.cell_groups[i].mine_num -= 1;
@@ -1230,7 +1242,7 @@ impl Game {
                         // Below shouldn't be true ever and exists to detects errors.
                         if self.cell_groups[i].mine_num as usize > self.cell_groups[i].offsets.len()
                         {
-                            self.save_state_info("test/FinalGameState.csv");
+                            self.save_state_info("test/FinalGameState.csv", simulate);
                             panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill.",self.cell_groups[i]);
                         }
                     }
@@ -1253,8 +1265,8 @@ impl Game {
                     }
                     // Increment loop index
                     i += 1;
+                    // TODO split to function END -----------------------------------------------------------------------------------------
                 }
-                // TODO split to function END -----------------------------------------------------------------------------------------
 
                 // Remove subset-superset overlaps.
                 {
@@ -1457,7 +1469,10 @@ impl Game {
 
                 // If there are too many combinations then abort calculation.
                 if combination_total > MAX_COMBINATIONS {
-                    println!("Not computing {combination_total} total combinations.");
+                    if LOGGING {
+                        println!("Not computing {combination_total} total combinations.");
+                        unreachable!() // TODO remove this after handling this possibility with a fast guess method.
+                    }
                     // Return that nothing was done.
                     return 0;
                 }
@@ -1479,7 +1494,7 @@ impl Game {
                 number_of_valid_combinations,
                 &occurrences_of_mine_per_offset,
             ) else {
-                    self.save_state_info("test/FinalGameState.csv");
+                    self.save_state_info("test/FinalGameState.csv", simulate);
                     dbg!(sub_group_mine_num_lower_limit);
                     dbg!(sub_group_mine_num_upper_limit);
                     panic!("There were no valid combinations!")
@@ -1497,11 +1512,13 @@ impl Game {
         if most_likelihood <= 1.0 - least_likelihood {
             // Then reveal all spots with lowest odds of mine.
             for least_likely_position in least_likely_positions {
-                println!(
-                    "Revealing {:?} with odds {:?} of being mine",
-                    self.offset_to_cell_cord(least_likely_position),
-                    least_likelihood
-                );
+                if LOGGING {
+                    println!(
+                        "Revealing {:?} with odds {:?} of being mine",
+                        self.offset_to_cell_cord(least_likely_position),
+                        least_likelihood
+                    );
+                }
                 if !simulate {
                     self.reveal(self.offset_to_cell_cord(least_likely_position));
                 } else if simulate {
@@ -1514,11 +1531,13 @@ impl Game {
         else if most_likelihood > 1.0 - least_likelihood {
             // Then flag all spots with lowest odds of mine.
             for most_likely_position in most_likely_positions {
-                println!(
-                    "Flagging {:?} with odds {:?} of being mine",
-                    self.offset_to_cell_cord(most_likely_position),
-                    most_likelihood
-                );
+                if LOGGING {
+                    println!(
+                        "Flagging {:?} with odds {:?} of being mine",
+                        self.offset_to_cell_cord(most_likely_position),
+                        most_likelihood
+                    );
+                }
                 let cord = self.offset_to_cell_cord(most_likely_position);
                 if !simulate {
                     self.flag(cord);
@@ -1570,7 +1589,9 @@ impl Game {
                 self.deterministic_solve(simulate)?;
             }
             if !self.cell_groups.is_empty() {
-                print!("Guess required. ");
+                if LOGGING {
+                    print!("Guess required. ");
+                }
                 self.process_action_stack(simulate)?;
                 if self.probabalistic_guess(simulate) >= 1 {
                     did_something += 1;
@@ -1582,8 +1603,7 @@ impl Game {
         // If the game still contains unexplored cells it was fully solved.
         if self.state.iter().contains(&CellKind::Unexplored) {
             Err(GameError::Unfinished)
-        }
-        else {
+        } else {
             Ok(())
         }
     }
@@ -1591,7 +1611,7 @@ impl Game {
     /// Saves information about this Game to file for potential debugging purposes.
     /// # Panics
     /// If it can't save to file path specified.
-    pub fn save_state_info(&self, path: &str) {
+    pub fn save_state_info(&self, path: &str, simulate: bool) {
         // save saved game state as picture
         // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
 
@@ -1625,6 +1645,35 @@ impl Game {
             if (i + 1) % self.board_cell_width as usize == 0 {
                 if let Err(e) = writeln!(file) {
                     eprintln!("Couldn't write to file: {e}");
+                }
+            }
+        }
+
+        if simulate {
+            // Separate simulation from solution attempt with space.
+            if let Err(e) = writeln!(file) {
+                eprintln!("Couldn't write to file: {e}");
+            }
+
+            for (i, cell) in (0..self.simulation.as_ref().unwrap().state.len())
+                .map(|i| self.simulation.as_ref().unwrap().value(i))
+                .enumerate()
+            {
+                let symbol_to_write = match cell {
+                    None => 'F',
+                    Some(c) => match c {
+                        0 => 'E',
+                        1..=8 => char::from_digit(c.clone(), 10).unwrap(),
+                        _ => panic!("c was {c} which is not a valid amount of mines."),
+                    },
+                };
+                if let Err(e) = write!(file, "{symbol_to_write} ") {
+                    eprintln!("Couldn't write to file: {e}");
+                }
+                if (i + 1) % self.board_cell_width as usize == 0 {
+                    if let Err(e) = writeln!(file) {
+                        eprintln!("Couldn't write to file: {e}");
+                    }
                 }
             }
         }
@@ -1719,7 +1768,7 @@ mod tests {
         game.get_board_screenshot_from_screen();
         game.reveal(place_to_click);
 
-        game.save_state_info("test/FinalGameState.csv");
+        game.save_state_info("test/FinalGameState.csv", false);
         // First move always gives a fully unexplored cell.
         assert_eq!(*game.state_at_cord(place_to_click), CellKind::Explored);
     }
@@ -1842,8 +1891,8 @@ mod tests {
     fn simulate_solve() {
         let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
         println!("{:?}", &game.simulation);
-        if let Err(x) = game.solve(CellCord(14, 7), true) {
-            panic!("{x}");
+        if let Err(e) = game.solve(CellCord(14, 7), true) {
+            panic!("{e}");
         }
         dbg!(game.state);
     }
@@ -1859,9 +1908,33 @@ mod tests {
             false, false, true, true, false, false, false, false, true, false, false, false, false,
             false, false, false, true, true, false, false, false, false, true, true, false,
         ];
-        if let Err(x) = game.solve(CellCord(0, 0), true) {
-            panic!("{x}");
+        if let Err(e) = game.solve(CellCord(0, 0), true) {
+            panic!("{e}");
         }
-        game.save_state_info("test/FinalGameState.csv")
+        game.save_state_info("test/FinalGameState.csv", true)
+    }
+
+    #[test]
+    fn simulate_win_rate() {
+        let mut win_cnt = 0;
+        let mut lose_cnt = 0;
+        for _ in 0..1000 {
+            let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
+            match game.solve(CellCord(14, 7), true) {
+                Err(GameError::RevealedMine(_)) => lose_cnt += 1,
+                Ok(_) => win_cnt += 1,
+                // TODO handle cases when below occurs.
+                Err(GameError::Unfinished) => {
+                    // dbg!(&game.state);
+                    // dbg!(&game.simulation.as_ref().unwrap().state);
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+        println!("Win count: {win_cnt}.");
+        println!("Lose count: {lose_cnt}.");
+        let winrate = win_cnt as f64 / (win_cnt + lose_cnt) as f64;
+        let winrate = winrate * 100f64;
+        println!("Winrate: {winrate}");
     }
 }

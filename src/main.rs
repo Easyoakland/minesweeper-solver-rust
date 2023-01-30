@@ -20,8 +20,8 @@ fn main(){
         0,
     );
 
-    if let Err(x) = game.solve(CellCord(0,0), false) {
-        panic!("{x}");
+    if let Err(e) = game.solve(CellCord(0,0), false) {
+        panic!("{e}");
     }
-    game.save_state_info("test/FinalGameState.csv");
+    game.save_state_info("test/FinalGameState.csv", false);
 }
