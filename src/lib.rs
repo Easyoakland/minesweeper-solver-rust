@@ -55,14 +55,22 @@ impl Sub for CellCord {
 }
 
 #[derive(Debug)]
-struct GameError(&'static str);
 
 /// Error that indicates something went wrong while trying to solve the game.
+/// These types of errors relate to the actual minesweeper game and not functional errors.
+pub enum GameError {
+    RevealedMine(CellCord),
+    UnidentifiedCell(CellCord),
+}
+
 impl Error for GameError {}
 
 impl fmt::Display for GameError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            Self::RevealedMine(x) => write!(f, "Revealed a mine at {x:?}."),
+            Self::UnidentifiedCell(x) => write!(f, "Can't identify cell at {x:?}"),
+        }
     }
 }
 
@@ -700,8 +708,14 @@ impl Game {
     }
 
     /// Sets up the `Game` so that it can run a simulation of solving a real game.
+    #[allow(clippy::missing_panics_doc)] // Uses unwrap that will never panic.
     #[must_use]
-    pub fn new_for_simulation(board_cell_width: u32, board_cell_height:u32, mine_num:u32, initial_guess: CellCord) -> Game {
+    pub fn new_for_simulation(
+        board_cell_width: u32,
+        board_cell_height: u32,
+        mine_num: u32,
+        initial_guess: CellCord,
+    ) -> Game {
         // Expert mode has the following values:
         // let width: u32 = 30;
         // let height: u32 = 16;
@@ -804,8 +818,11 @@ impl Game {
     /// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
     /// <strong>Warning:</strong> Don't use this. It is only public to do a benchmark.
     /// </p>
+    ///
+    /// # Panics
+    /// Panics if the `identify_cell` doesn't work on the CellCord(0, 0). Otherwise does nothing.
     pub fn identify_cell_benchmark_pub_func(&mut self) {
-        self.identify_cell(CellCord(4, 3)).unwrap();
+        self.identify_cell(CellCord(0, 0)).unwrap();
     }
 
     fn identify_cell(&mut self, cord: CellCord) -> Result<CellKind, GameError> {
@@ -822,8 +839,10 @@ impl Game {
         // Get section of the board that must be identified as a particular cell kind.
         let sectioned_board_image = imageops::crop_imm(
             &self.board_screenshot,
-            TryInto::<u32>::try_into(pos.0).unwrap() - TryInto::<u32>::try_into(self.top_left.0).unwrap(),
-            TryInto::<u32>::try_into(pos.1).unwrap() - TryInto::<u32>::try_into(self.top_left.1).unwrap(),
+            TryInto::<u32>::try_into(pos.0).unwrap()
+                - TryInto::<u32>::try_into(self.top_left.0).unwrap(),
+            TryInto::<u32>::try_into(pos.1).unwrap()
+                - TryInto::<u32>::try_into(self.top_left.1).unwrap(),
             self.individual_cell_width,
             self.individual_cell_height,
         );
@@ -856,7 +875,7 @@ impl Game {
         save_image("cell_images/Unidentified.png", &sectioned_board_image);
         // If the program can't identify the cell then it shouldn't keep trying to play the game.
         self.save_state_info("test/FinalGameState.csv");
-        Err(GameError("Can't identify the cell."))
+        Err(GameError::UnidentifiedCell(cord))
     }
 
     fn state_by_cell_cord(&mut self, cord: CellCord) -> &mut CellKind {
@@ -864,17 +883,17 @@ impl Game {
         &mut self.state[offset]
     }
 
-    fn update_state(&mut self, cord: CellCord) {
+    fn update_state(&mut self, cord: CellCord) -> Result<(), GameError> {
         // Only unexplored cells can update so don't bother checking if it wasn't an unexplored cell last time it was updated.
         let cell_state_record = *(self.state_by_cell_cord(cord));
         if cell_state_record != CellKind::Unexplored {
-            return;
+            return Ok(());
         }
 
         // TODO Fix unwrap
         let cell = Cell {
             cord,
-            kind: self.identify_cell(cord).unwrap(),
+            kind: self.identify_cell(cord)?,
         };
         // If cell state is different from recorded for that cell.
         if cell.kind != cell_state_record {
@@ -884,7 +903,7 @@ impl Game {
             if cell.kind == CellKind::Explored {
                 // Update state of its neighbors.
                 for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
-                    self.update_state(neighbor);
+                    self.update_state(neighbor)?;
                 }
             }
             // If it is a number and not a fully explored cell.
@@ -903,6 +922,7 @@ impl Game {
                 self.frontier.push(cell);
             }
         }
+        Ok(())
     }
 
     pub fn reveal(&mut self, cord: CellCord) {
@@ -912,12 +932,12 @@ impl Game {
         // self.update_state(cord);
     }
 
-    fn process_action_stack(&mut self, simulate: bool) {
+    fn process_action_stack(&mut self, simulate: bool) -> Result<(), GameError> {
         // Only need to check tha the most recent clicked cell is now updated. When it is presumably the previously clicked cells will have also updated.
         // Next block will repeatedly check if the most recent cell is updated.
         if !simulate {
             // If empty nothing to process so return.
-            let Some(cord) = self.action_stack.last() else { return };
+            let Some(cord) = self.action_stack.last() else { return Ok(()) };
             let cord = *cord;
 
             let mut temp_cell_kind = CellKind::Unexplored;
@@ -930,7 +950,7 @@ impl Game {
 
                 self.get_board_screenshot_from_screen();
                 // TODO replace below unwrap with handling errors by saving the unknown image and quitting.
-                temp_cell_kind = self.identify_cell(cord).unwrap();
+                temp_cell_kind = self.identify_cell(cord)?;
                 // If the clicked cell looks like it is an unnumbered and explored cell then check that it's neighbors aren't unexplored.
                 // If they are any are unexplored then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
                 if temp_cell_kind == CellKind::Explored {
@@ -944,7 +964,7 @@ impl Game {
                         clicked_cell.neighbors(1, self.board_cell_width, self.board_cell_height)
                     {
                         // TODO replace unwrap with handling of error by saving unknown image.
-                        if self.identify_cell(neighbor).unwrap() == CellKind::Unexplored {
+                        if self.identify_cell(neighbor)? == CellKind::Unexplored {
                             // If any neighbors are unexplored then this cell can't be a blank explored
                             temp_cell_kind = CellKind::Unexplored; // set a so while loop will take a new screenshot;
                             break 'neighbor_loop;
@@ -960,34 +980,38 @@ impl Game {
                 .pop()
                 .expect("While loop should prevent empty.");
             if !simulate {
-                self.update_state(cord);
+                self.update_state(cord)?;
             } else if simulate {
-                self.update_state_simulation(cord);
+                self.update_state_simulation(cord)?;
             };
         }
+        Ok(())
     }
 
-    fn identify_cell_simulation(&self, cord: CellCord) -> Result<CellKind, Box<dyn Error>> {
-        CellKind::value_to_cell_kind(
-            self.simulation
-                .as_ref()
-                .expect("Simulation doesn't exist but function requires it does.")
-                .value(cell_cord_to_offset(self.board_cell_width, cord))
-                .unwrap_or_else(|| panic!("Revealed Mine at {cord:?}.")),
-        )
+    fn identify_cell_simulation(&self, cord: CellCord) -> Result<CellKind, GameError> {
+        let Some(value) = self
+            .simulation
+            .as_ref()
+            .expect("Simulation doesn't exist but function requires it does.")
+            .value(cell_cord_to_offset(self.board_cell_width, cord))
+        else {
+            return Err(GameError::RevealedMine(cord));
+        };
+        Ok(CellKind::value_to_cell_kind(value)
+            .expect("Value should always be 0-8 from previous assignment."))
     }
 
-    fn update_state_simulation(&mut self, cord: CellCord) {
+    fn update_state_simulation(&mut self, cord: CellCord) -> Result<(), GameError> {
         // Only unexplored cells can update so don't bother checking if it wasn't an unexplored cell last time it was updated.
         let cell_state_record = *(self.state_by_cell_cord(cord));
         if cell_state_record != CellKind::Unexplored {
-            return;
+            return Ok(());
         }
 
         // TODO Fix unwrap
         let cell = Cell {
             cord,
-            kind: self.identify_cell_simulation(cord).unwrap(),
+            kind: self.identify_cell_simulation(cord)?,
         };
         // If cell state is different from recorded for that cell.
         if cell.kind != cell_state_record {
@@ -997,7 +1021,7 @@ impl Game {
             if cell.kind == CellKind::Explored {
                 // Update state of its neighbors.
                 for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
-                    self.update_state_simulation(neighbor);
+                    self.update_state_simulation(neighbor)?;
                 }
             }
             // If it is a number and not a fully explored cell.
@@ -1016,6 +1040,7 @@ impl Game {
                 self.frontier.push(cell);
             }
         }
+        Ok(())
     }
 
     fn reveal_simulation(&mut self, cord: CellCord) {
@@ -1152,7 +1177,7 @@ impl Game {
 
     // Uses deterministic methods to solve the game.
     // TODO make processing frontier and CellGroup two separate functions.
-    fn deterministic_solve(&mut self, simulate: bool) {
+    fn deterministic_solve(&mut self, simulate: bool) -> Result<(), GameError> {
         // Makes outermost loop always execute at least once.
         let mut do_while_flag = true;
         // Loops through frontier and self.cell_groups.
@@ -1160,7 +1185,7 @@ impl Game {
         while do_while_flag || !self.frontier.is_empty() {
             do_while_flag = false;
             while !self.frontier.is_empty() || !self.action_stack.is_empty() {
-                self.process_action_stack(simulate);
+                self.process_action_stack(simulate)?;
                 self.process_frontier(simulate);
             }
             // Set did_someting to 1 so self.cell_groups is processed at least once.
@@ -1240,6 +1265,7 @@ impl Game {
                 }
             }
         }
+        Ok(())
     }
 
     fn enumerate_all_possible_arrangements(
@@ -1429,7 +1455,7 @@ impl Game {
 
                 // If there are too many combinations then abort calculation.
                 if combination_total > MAX_COMBINATIONS {
-                    println!("Not computing {combination_total} total combinations. using fast guess instead");
+                    println!("Not computing {combination_total} total combinations.");
                     // Return that nothing was done.
                     return 0;
                 }
@@ -1507,7 +1533,9 @@ impl Game {
     /// # Panics
     /// Primarily panics if the given starting cordinate doesn't exist in the game.
     /// Also panics if there is an internal bug in the code which is detected in one of the sub functions.
-    pub fn solve(&mut self, initial_guess: CellCord, simulate: bool) {
+    /// # Errors
+    /// Returns a `Err(GameError)` corresponding to an issue solving the game if one occurs.
+    pub fn solve(&mut self, initial_guess: CellCord, simulate: bool) -> Result<(), GameError> {
         assert!(
             initial_guess.0 <= self.board_cell_width as usize,
             "Initial guess is larger than the board width."
@@ -1532,22 +1560,23 @@ impl Game {
             // Should always try deterministic solve at least once in case the previous guess made deterministic solving possible through a flag.
             // If it did then there would be no new actions on the action_stack but there might be something new that can be done.
             // At the very least deterministic solve will remove the now flagged location from all the `self.cell_groups`
-            self.deterministic_solve(simulate);
+            self.deterministic_solve(simulate)?;
 
             while !self.action_stack.is_empty() {
                 // Loop will also continue if the state of the board is about to be updated and therefore there might be new moves.
-                self.process_action_stack(simulate);
-                self.deterministic_solve(simulate);
+                self.process_action_stack(simulate)?;
+                self.deterministic_solve(simulate)?;
             }
             if !self.cell_groups.is_empty() {
                 print!("Guess required. ");
-                self.process_action_stack(simulate);
+                self.process_action_stack(simulate)?;
                 if self.probabalistic_guess(simulate) >= 1 {
                     did_something += 1;
                     continue;
                 }
             }
         }
+        Ok(())
     }
 
     /// Saves information about this Game to file for potential debugging purposes.
@@ -1802,9 +1831,11 @@ mod tests {
     #[ignore]
     #[test]
     fn simulate_solve() {
-        let mut game = Game::new_for_simulation(30,16,99,CellCord(14, 7));
+        let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
         println!("{:?}", &game.simulation);
-        game.solve(CellCord(14, 7), true);
+        if let Err(x) = game.solve(CellCord(14, 7), true) {
+            panic!("{x}");
+        }
         dbg!(game.state);
     }
 
@@ -1813,16 +1844,15 @@ mod tests {
     #[ignore]
     #[test]
     fn simulate_infinite_flag_error() {
-        let mut game = Game::new_for_simulation(5,5,7,CellCord(0,0));
-        game.simulation = Some(Simulation::new(5, 5, 7, CellCord(0,0)));
+        let mut game = Game::new_for_simulation(5, 5, 7, CellCord(0, 0));
+        game.simulation = Some(Simulation::new(5, 5, 7, CellCord(0, 0)));
         game.simulation.as_mut().unwrap().state = vec![
-            false, false, true, true, false,
-            false, false, false, true, false,
-            false, false, false, false, false,
-            false, true, true, false, false,
-            false, false, true, true, false,
+            false, false, true, true, false, false, false, false, true, false, false, false, false,
+            false, false, false, true, true, false, false, false, false, true, true, false,
         ];
-        game.solve(CellCord(0,0), true);
+        if let Err(x) = game.solve(CellCord(0, 0), true) {
+            panic!("{x}");
+        }
         game.save_state_info("test/FinalGameState.csv")
     }
 }
