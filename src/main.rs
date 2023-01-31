@@ -1,6 +1,4 @@
 use minesweeper_solver_in_rust::{Game, CellCord};
-// Replace unwraps with unreachable! where appropriate.
-// Convert return true or false for when a function does something to a Option where it makes sense. Like when it returns a tuple with true false and a value.
 
 fn main(){
     let mut game = Game::new(

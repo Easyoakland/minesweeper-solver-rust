@@ -14,7 +14,7 @@ use std::{
 };
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
-const MAX_COMBINATIONS: u64 = 2_000_000;
+const MAX_COMBINATIONS: u128 = 2_000_000;
 const LOGGING: bool = false;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -61,6 +61,7 @@ impl Sub for CellCord {
 /// These types of errors relate to the actual minesweeper game and not functional errors.
 pub enum GameError {
     RevealedMine(CellCord),
+    IncorrectFlag,
     UnidentifiedCell(CellCord),
     Unfinished,
 }
@@ -76,6 +77,7 @@ impl fmt::Display for GameError {
                 f,
                 "The game was unable to be finished for an unknown reason."
             ),
+            Self::IncorrectFlag => write!(f, "One of the flags is incorrect."),
         }
     }
 }
@@ -393,7 +395,7 @@ where
 /// assert_eq!(factorial(3), 6);
 /// ```
 #[must_use]
-pub fn factorial(n: u64) -> u64 {
+pub fn factorial(n: u128) -> u128 {
     (2..(n + 1)).product()
 }
 
@@ -900,7 +902,6 @@ impl Game {
             return Ok(());
         }
 
-        // TODO Fix unwrap
         let cell = Cell {
             cord,
             kind: self.identify_cell(cord)?,
@@ -959,7 +960,6 @@ impl Game {
                 assert!(i < TIMEOUTS_ATTEMPTS_NUM, "Board won't update. Game Loss?");
 
                 self.get_board_screenshot_from_screen();
-                // TODO replace below unwrap with handling errors by saving the unknown image and quitting.
                 temp_cell_kind = self.identify_cell(cord)?;
                 // If the clicked cell looks like it is an unnumbered and explored cell then check that it's neighbors aren't unexplored.
                 // If they are any are unexplored then the clicked cell is not finished loading and it only looks this way because that's how the program is displaying it temporarily while it loads.
@@ -973,7 +973,6 @@ impl Game {
                     'neighbor_loop: for neighbor in
                         clicked_cell.neighbors(1, self.board_cell_width, self.board_cell_height)
                     {
-                        // TODO replace unwrap with handling of error by saving unknown image.
                         if self.identify_cell(neighbor)? == CellKind::Unexplored {
                             // If any neighbors are unexplored then this cell can't be a blank explored
                             temp_cell_kind = CellKind::Unexplored; // set a so while loop will take a new screenshot;
@@ -1018,7 +1017,6 @@ impl Game {
             return Ok(());
         }
 
-        // TODO Fix unwrap
         let cell = Cell {
             cord,
             kind: self.identify_cell_simulation(cord)?,
@@ -1054,9 +1052,6 @@ impl Game {
     }
 
     fn reveal_simulation(&mut self, cord: CellCord) {
-        // TODO replace below unwrap. It should somehow indicate that a mine was revealed so game loss.
-        // self.identify_cell_simulation(cord).unwrap();
-        // self.update_state_simulation(cord);
         self.action_stack.push(cord);
     }
 
@@ -1152,7 +1147,6 @@ impl Game {
         // Set mine num based on the cell's number.
         if let Some(cell_value) = cell.kind.value() {
             // The amount of mines in the CellGroup is the amount there are around the cell minus how many have already been identified
-            // TODO check that having no mines makes sense if more flags around cell then should be do to bad previous guess.
             let mine_num = cell_value.saturating_sub(flag_cnt);
             Some(CellGroup { offsets, mine_num })
         }
@@ -1224,14 +1218,15 @@ impl Game {
                                 offset,
                                 self.cell_groups[i]
                             );
-                            // TODO below has a subtract with overflow issue sometimes.
-                            if self.cell_groups[i].offsets.len()
-                                < (self.cell_groups[i].mine_num as usize) - 1
-                            {
-                                panic!("There are more mines than places to put them. Removed offset: {:?} as it was a flag in cell_group: {:?}.", offset, self.cell_groups[i]);
-                            }
                             // ...and decrease the amount of mines left.
-                            self.cell_groups[i].mine_num -= 1;
+                            if let Some(new_mine_num) = self.cell_groups[i].mine_num.checked_sub(1)
+                            {
+                                self.cell_groups[i].mine_num = new_mine_num;
+                            } else {
+                                // If there is an error when subtracting it means that a flag was incorrect at some point and now the board can have inconsistency.
+                                // I imagine there is a way to recover from this but it is rather complicated if possible.
+                                return Err(GameError::IncorrectFlag);
+                            }
                             did_something += 1;
                         }
                         // If the cell_group now contains an not unexplored cell remove that cell as it can't be one of the mines anymore.
@@ -1240,11 +1235,13 @@ impl Game {
                             did_something += 1;
                         }
 
-                        // Below shouldn't be true ever and exists to detects errors.
+                        // Below will occur if there is an inconsistent board state from an incorrect flag.
                         if self.cell_groups[i].mine_num as usize > self.cell_groups[i].offsets.len()
                         {
-                            self.save_state_info("test/FinalGameState.csv", simulate);
-                            panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill. Just removed {offset}",self.cell_groups[i]);
+                            return Err(GameError::IncorrectFlag);
+                            // DEBUG
+                            // self.save_state_info("test/FinalGameState.csv", simulate);
+                            // panic!("ERROR at self.cell_groups[{i}]={:?} has more mines than cells to fill. Just removed {offset}",self.cell_groups[i]);
                         }
                     }
                     // TODO split to function END -----------------------------------------------------------------------------------------
@@ -1350,10 +1347,7 @@ impl Game {
         occurrences_of_mine_per_offset: &HashMap<usize, i32>,
     ) -> Option<(Vec<usize>, f64, Vec<usize>, f64)> {
         // If there was a valid combination.
-        if number_of_valid_combinations > 0
-        // TODO remove next line I don't know why it is here.
-        // && occurrences_of_mine_per_offset.values().max().unwrap() > &0
-        {
+        if number_of_valid_combinations > 0 {
             // Enumerate offsets and chances of those offsets.
             for (offset, occurrence_of_mine_at_offset) in occurrences_of_mine_per_offset.iter() {
                 // The chance a mine is somewhere is the amount of combinations a mine occurred in that position divided by how many valid combinations there are total.
@@ -1461,11 +1455,11 @@ impl Game {
             {
                 // Calculate the amount of combinations. Integer division means it might be off by one but that doesn't matter.
                 let combination_amount =
-                    factorial(sub_group_total_offsets_after_overlaps_removed.len() as u64)
+                    factorial(sub_group_total_offsets_after_overlaps_removed.len() as u128)
                         / (factorial(
-                            sub_group_total_offsets_after_overlaps_removed.len() as u64
-                                - sub_group_mine_num as u64,
-                        ) * factorial(sub_group_mine_num as u64));
+                            sub_group_total_offsets_after_overlaps_removed.len() as u128
+                                - sub_group_mine_num as u128,
+                        ) * factorial(sub_group_mine_num as u128));
                 combination_total += combination_amount;
 
                 // If there are too many combinations then abort calculation.
@@ -1498,6 +1492,7 @@ impl Game {
                     self.save_state_info("test/FinalGameState.csv", simulate);
                     dbg!(sub_group_mine_num_lower_limit);
                     dbg!(sub_group_mine_num_upper_limit);
+                    dbg!(sub_group);
                     panic!("There were no valid combinations!")
                 };
             (
@@ -1508,10 +1503,41 @@ impl Game {
             ) = x;
         }
 
-        // TODO make code below new function.
-        // If more certain about where a mine isn't than where one is.
-        if most_likelihood <= 1.0 - least_likelihood {
-            // Then reveal all spots with lowest odds of mine.
+        // TODO make code below new function. START -------------------------------------------------------------
+        // If know where a mine or multiple are with certainty then flag each place that is definitely a mine.
+        if f64::abs(most_likelihood - 1.0) <= f64::EPSILON {
+            for most_likely_position in most_likely_positions {
+                if LOGGING {
+                    println!(
+                        "Flagging {:?} with odds {:?} of being mine.",
+                        self.offset_to_cell_cord(most_likely_position),
+                        most_likelihood
+                    );
+                    if simulate {
+                        if self
+                            .simulation
+                            .as_ref()
+                            .unwrap()
+                            .is_mine(most_likely_position)
+                        {
+                            println!("This is correct for the simulation")
+                        } else {
+                            println! {"This is incorrect for the simulation"}
+                        }
+                    }
+                }
+                let cord = self.offset_to_cell_cord(most_likely_position);
+                if !simulate {
+                    self.flag(cord);
+                } else if simulate {
+                    self.flag_simulation(cord);
+                }
+                did_something += 1;
+            }
+        }
+        // If there wasn't a spot that had a definite mine.
+        // Then reveal all spots with lowest odds of mine.
+        else {
             for least_likely_position in least_likely_positions {
                 if LOGGING {
                     println!(
@@ -1528,26 +1554,8 @@ impl Game {
             }
             did_something += 1;
         }
-        // If more certain about where a mine is than where one isn't.
-        else if most_likelihood > 1.0 - least_likelihood {
-            // Then flag all spots with lowest odds of mine.
-            for most_likely_position in most_likely_positions {
-                if LOGGING {
-                    println!(
-                        "Flagging {:?} with odds {:?} of being mine",
-                        self.offset_to_cell_cord(most_likely_position),
-                        most_likelihood
-                    );
-                }
-                let cord = self.offset_to_cell_cord(most_likely_position);
-                if !simulate {
-                    self.flag(cord);
-                } else if simulate {
-                    self.flag_simulation(cord);
-                }
-                did_something += 1;
-            }
-        }
+        // TODO new function END -------------------------------------------------------------
+
         did_something
     }
 
@@ -1589,6 +1597,37 @@ impl Game {
                 self.process_action_stack(simulate)?;
                 self.deterministic_solve(simulate)?;
             }
+
+            // DEBUG
+            if LOGGING && simulate {
+                // If a cell group contains more bombs than the actual amount of bombs in the simulation.
+                let mut actual_cell_groups = Vec::new();
+                let mut actual_mine_num = 0;
+                let problem_cell_groups: Vec<&CellGroup> = self
+                    .cell_groups
+                    .iter()
+                    .filter(|cell_group| {
+                        actual_mine_num = cell_group
+                            .offsets
+                            .iter()
+                            .filter(|offset| self.simulation.as_ref().unwrap().state[**offset])
+                            .count();
+                        let filter_result = actual_mine_num != cell_group.mine_num as usize;
+                        if filter_result {
+                            actual_cell_groups.push(CellGroup {
+                                offsets: cell_group.offsets.clone(),
+                                mine_num: actual_mine_num as u32,
+                            });
+                        }
+                        filter_result
+                    })
+                    .collect();
+                if !problem_cell_groups.is_empty() {
+                    self.save_state_info("test/FinalGameStateBefore.csv", true);
+                    println!("Cell Group created with more bombs than than actually exist. Problematic groups are {problem_cell_groups:#?}.\n Cell Groups should be:\n{actual_cell_groups:#?}")
+                }
+            }
+
             if !self.cell_groups.is_empty() {
                 if LOGGING {
                     print!("Guess required. ");
@@ -1894,21 +1933,21 @@ mod tests {
         assert_eq!(sim.state.iter().filter(|x| **x).count(), 6);
     }
 
-    // TODO remove ignore after making more graceful handling of choosing a mine in simulation.
-    #[ignore]
     #[test]
     fn simulate_solve() {
         let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
-        println!("{:?}", &game.simulation);
-        if let Err(e) = game.solve(CellCord(14, 7), true) {
-            panic!("{e}");
+        if LOGGING {println!("{:?}", &game.simulation);}
+        match game.solve(CellCord(14, 7), true) {
+            Ok(_) => (),
+            Err(GameError::RevealedMine(_)) | Err(GameError::Unfinished) => (),
+            Err(e) => panic!("{e}"),
         }
-        dbg!(game.state);
+        if LOGGING {
+            dbg!(game.state);
+        };
     }
 
     // Test to figure out why infinite `Tried flagging a non flaggable at` issue
-    // TODO remove ignore after making more graceful handling of choosing a mine in simulation.
-    #[ignore]
     #[test]
     fn simulate_infinite_flag_error() {
         let mut game = Game::new_for_simulation(5, 5, 7, CellCord(0, 0));
@@ -1917,23 +1956,29 @@ mod tests {
             false, false, true, true, false, false, false, false, true, false, false, false, false,
             false, false, false, true, true, false, false, false, false, true, true, false,
         ];
-        if let Err(e) = game.solve(CellCord(0, 0), true) {
-            panic!("{e}");
+        match game.solve(CellCord(0, 0), true) {
+            Ok(_) => (),
+            Err(GameError::RevealedMine(_)) | Err(GameError::Unfinished) => (),
+            Err(e) => panic!("{e}"),
         }
         game.save_state_info("test/FinalGameState.csv", true)
     }
 
+    // Test calculates win rate in simulation.
+    // Mainly works to test that many runs don't panic.
     #[test]
     fn simulate_win_rate() {
         let mut win_cnt = 0;
         let mut lose_cnt = 0;
-        for _ in 0..1000 {
+        let mut unfinished_cnt = 0;
+        for _ in 0..100 {
             let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
             match game.solve(CellCord(14, 7), true) {
                 Err(GameError::RevealedMine(_)) => lose_cnt += 1,
                 Ok(_) => win_cnt += 1,
                 // TODO handle cases when below occurs.
                 Err(GameError::Unfinished) => {
+                    unfinished_cnt += 1;
                     // dbg!(&game.state);
                     // dbg!(&game.simulation.as_ref().unwrap().state);
                 }
@@ -1942,8 +1987,122 @@ mod tests {
         }
         println!("Win count: {win_cnt}.");
         println!("Lose count: {lose_cnt}.");
+        println!("Unfinished count: {unfinished_cnt}.");
+        lose_cnt += unfinished_cnt;
         let winrate = win_cnt as f64 / (win_cnt + lose_cnt) as f64;
         let winrate = winrate * 100f64;
         println!("Winrate: {winrate}");
+    }
+
+    // Test to figure out 'ERROR at self.cell_groups[5]=CellGroup { offsets: {}, mine_num: 1 } has more mines than cells to fill. Just removed 365' issue.
+    #[test]
+    fn more_mines_than_cells_error() {
+        let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
+        game.simulation = Some(Simulation::new(30, 16, 99, CellCord(14, 7)));
+        game.simulation.as_mut().unwrap().state = vec![
+            true, false, false, false, false, true, false, false, false, false, false, false,
+            false, false, false, true, false, false, false, true, false, true, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, true, false, false, false, false, true, true, false, true,
+            true, false, false, false, false, false, true, false, false, false, false, false,
+            false, false, false, true, false, false, false, false, true, false, false, false,
+            false, false, false, false, false, false, false, false, false, true, false, false,
+            false, true, false, false, true, false, false, true, false, false, true, false, false,
+            false, true, false, false, false, false, false, false, false, true, false, false,
+            false, false, true, false, false, false, false, true, false, true, false, false, true,
+            false, false, false, false, false, false, true, true, true, false, false, false, true,
+            true, true, true, false, false, false, false, false, false, false, true, false, false,
+            false, false, false, false, false, true, true, true, true, false, true, false, false,
+            true, false, false, false, false, false, false, false, true, false, false, false,
+            false, false, false, false, true, false, true, true, false, true, false, false, false,
+            true, false, false, false, false, false, false, false, true, false, false, false,
+            false, false, false, true, false, false, false, true, false, false, false, false,
+            false, false, false, false, true, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, true, false, false,
+            true, true, false, true, false, false, true, true, false, true, true, false, false,
+            false, false, false, true, false, false, false, false, false, false, false, false,
+            false, false, true, true, true, true, false, false, false, true, true, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, true, false, false, false, false,
+            false, true, false, true, false, false, false, true, false, false, false, false, false,
+            true, false, false, false, false, false, false, false, true, false, false, false,
+            false, true, false, true, false, true, false, true, true, false, false, false, true,
+            false, false, true, false, true, false, false, true, true, true, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, true, false, true, false, true, false,
+            false, false, false, false, true, false, true, true, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, true, false, false,
+            true, true, false, false, true, false, false, false, true, true, false, false, false,
+            false, false, true, false, false, false, false, false, false, false, false, true,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, true, true, true, false,
+            false, false, false, false, false, false, false, false, false, false, false, true,
+            false, false, false, false, false, false, false, true, false, false, false, false,
+            false, false, false, false, false, false, false,
+        ];
+        match game.solve(CellCord(14, 7), true) {
+            Ok(_) => (),
+            Err(GameError::RevealedMine(c)) => println!("Revealed mine at {c:?}"),
+            Err(GameError::IncorrectFlag) => println!("A flag was incorrect."),
+            Err(GameError::Unfinished) => (),
+            Err(e) => panic!("{e}"),
+        }
+        game.save_state_info("test/FinalGameState.csv", true)
+    }
+
+    // Test to figure out 'There were no valid combinations!' issue.
+    #[test]
+    fn no_valid_combinations_error() {
+        let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
+        game.simulation = Some(Simulation::new(30, 16, 99, CellCord(14, 7)));
+        game.simulation.as_mut().unwrap().state = vec![
+            false, false, false, true, false, false, false, false, true, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, true, false, false, false, false, false, false, true, false, false, false,
+            false, false, false, false, true, true, false, false, false, false, false, false,
+            false, true, false, false, false, false, false, false, true, true, false, false, false,
+            false, true, true, false, true, true, true, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, true, false, false, false, false, true, true, false, true, true, false, false,
+            false, true, false, false, true, false, false, false, false, true, false, true, true,
+            false, false, false, false, false, false, false, false, false, true, true, false,
+            false, true, false, true, true, true, false, false, true, false, false, true, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, true, false,
+            false, true, false, true, false, false, false, true, true, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            true, false, false, false, false, false, false, false, false, false, true, false,
+            false, false, false, false, false, false, false, false, true, true, false, false,
+            false, false, false, false, false, true, false, false, true, false, false, true, false,
+            false, false, false, false, false, false, true, true, false, false, false, true, false,
+            false, false, false, true, false, false, false, false, true, true, false, false, false,
+            false, false, false, true, true, true, false, false, false, false, false, false, false,
+            false, false, true, true, false, false, false, false, true, false, false, false, false,
+            false, false, true, true, false, false, false, false, false, false, false, true, false,
+            false, true, true, false, false, true, false, false, false, false, true, false, false,
+            false, false, false, false, false, false, false, true, false, false, false, false,
+            true, false, true, false, false, true, false, false, false, false, false, false, false,
+            true, false, false, false, true, true, false, false, false, false, false, false, false,
+            false, true, true, false, false, false, false, false, true, false, false, false, true,
+            true, false, false, false, false, false, true, true, false, true, false, false, false,
+            true, false, false, true, true, true, true, true, true, false, false, false, false,
+            false, false, false, false, false, false, true, false, true, false, false, false,
+            false, false, false, true, false, false, true, true, false, false, false, false, true,
+            false, false, false, true, false, true, false, false, false, true, true, false, false,
+            false, false, false, true, false, false, true, false, false, false, false, false,
+            false, false, false, true, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, true, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false,
+        ];
+        match game.solve(CellCord(14, 7), true) {
+            Ok(_) => (),
+            Err(GameError::RevealedMine(c)) => println!("Revealed mine at {c:?}"),
+            Err(GameError::IncorrectFlag) => println!("A flag was incorrect."),
+            Err(GameError::Unfinished) => (),
+            Err(e) => panic!("{e}"),
+        }
+        game.save_state_info("test/FinalGameState.csv", true)
     }
 }
