@@ -1,0 +1,6 @@
+- This project solves minesweeper. Its a ported and improved version of the python minesweeper solver I made previously. It's setup to solve minesweeper from `minesweeperonline.com/`, however, it can be setup to solve any minesweeper program as long as the .png files are replaced. It's expected that all images for tile/cell types are the same image size and correctly named. It is possible the images in the repo won't work for you on the website as it has multiple possible tile images depending on computer monitor size.
+- In the `lib.rs` there are some configuration options.
+    - `TIMEOUTS_ATTEMPTS_NUM` controls how many times the program is willing to rescan the page for an update. This exists because sometimes the board is screenshotted to be analyzed before the board updates.
+    - `MAX_COMBINATIONS` controls how many combinations/permutations the probabilistic guess method is willing to go through before giving up and using a less accurate but quicker guess method instead.
+
+![demo gif](/demo.gif)
