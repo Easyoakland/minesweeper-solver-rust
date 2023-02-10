@@ -1936,7 +1936,9 @@ mod tests {
     #[test]
     fn simulate_solve() {
         let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
-        if LOGGING {println!("{:?}", &game.simulation);}
+        if LOGGING {
+            println!("{:?}", &game.simulation);
+        }
         match game.solve(CellCord(14, 7), true) {
             Ok(_) => (),
             Err(GameError::RevealedMine(_)) | Err(GameError::Unfinished) => (),
@@ -1968,30 +1970,35 @@ mod tests {
     // Mainly works to test that many runs don't panic.
     #[test]
     fn simulate_win_rate() {
-        let mut win_cnt = 0;
-        let mut lose_cnt = 0;
-        let mut unfinished_cnt = 0;
-        for _ in 0..100 {
+        use rayon::prelude::*;
+        use std::sync::{Arc, Mutex};
+        let win_cnt = Arc::new(Mutex::new(0));
+        let lose_cnt = Arc::new(Mutex::new(0));
+        let unfinished_cnt = Arc::new(Mutex::new(0));
+        (0..100).into_par_iter().for_each(|_| {
             let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
             match game.solve(CellCord(14, 7), true) {
-                Err(GameError::RevealedMine(_)) => lose_cnt += 1,
-                Ok(_) => win_cnt += 1,
+                Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
+                Ok(_) => *win_cnt.lock().unwrap() += 1,
                 // TODO handle cases when below occurs.
                 Err(GameError::Unfinished) => {
-                    unfinished_cnt += 1;
+                    *unfinished_cnt.lock().unwrap() += 1;
                     // dbg!(&game.state);
                     // dbg!(&game.simulation.as_ref().unwrap().state);
                 }
                 Err(e) => panic!("{e}"),
             }
+        });
+        {
+            println!("Win count: {}.", win_cnt.lock().unwrap());
+            println!("Lose count: {}.", lose_cnt.lock().unwrap());
+            println!("Unfinished count: {}.", unfinished_cnt.lock().unwrap());
+            *lose_cnt.lock().unwrap() += *unfinished_cnt.lock().unwrap();
+            let win_cnt = *win_cnt.lock().unwrap();
+            let winrate = win_cnt as f64 / (win_cnt + *lose_cnt.lock().unwrap()) as f64;
+            let winrate = winrate * 100f64;
+            println!("Winrate: {winrate}");
         }
-        println!("Win count: {win_cnt}.");
-        println!("Lose count: {lose_cnt}.");
-        println!("Unfinished count: {unfinished_cnt}.");
-        lose_cnt += unfinished_cnt;
-        let winrate = win_cnt as f64 / (win_cnt + lose_cnt) as f64;
-        let winrate = winrate * 100f64;
-        println!("Winrate: {winrate}");
     }
 
     // Test to figure out 'ERROR at self.cell_groups[5]=CellGroup { offsets: {}, mine_num: 1 } has more mines than cells to fill. Just removed 365' issue.
