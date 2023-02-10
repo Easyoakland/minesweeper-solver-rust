@@ -1971,11 +1971,19 @@ mod tests {
     #[test]
     fn simulate_win_rate() {
         use rayon::prelude::*;
-        use std::sync::{Arc, Mutex};
-        let win_cnt = Arc::new(Mutex::new(0));
-        let lose_cnt = Arc::new(Mutex::new(0));
-        let unfinished_cnt = Arc::new(Mutex::new(0));
-        (0..100).into_par_iter().for_each(|_| {
+        use std::sync::Mutex;
+        let win_cnt = Mutex::new(0);
+        let lose_cnt = Mutex::new(0);
+        let unfinished_cnt = Mutex::new(0);
+        let iteration_cnt;
+        // 10x faster on release so 10x more iterations can be done.
+        if cfg!(debug_assertions) {
+            iteration_cnt = 1000;
+        }
+        else {
+            iteration_cnt = 10000;
+        }
+        (0..iteration_cnt).into_par_iter().for_each(|_| {
             let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
             match game.solve(CellCord(14, 7), true) {
                 Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
