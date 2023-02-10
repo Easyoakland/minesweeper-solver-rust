@@ -1640,9 +1640,11 @@ impl Game {
             }
         }
 
-        // If the game still contains unexplored cells it was fully solved.
+        // If the game still contains unexplored cells it was not fully solved.
         if self.state.iter().contains(&CellKind::Unexplored) {
-            Err(GameError::Unfinished)
+            // This situation can occur if a wall of mines separates the two section of the board because the frontier won't be able to pass the wall.
+            // So start solution at a random unexplored cell which most likely be on the other side of the mine wall.
+            self.solve(offset_to_cell_cord(self.board_cell_width, self.state.iter().position(|&x| x==CellKind::Unexplored).unwrap()), simulate)
         } else {
             Ok(())
         }
@@ -1941,7 +1943,7 @@ mod tests {
         }
         match game.solve(CellCord(14, 7), true) {
             Ok(_) => (),
-            Err(GameError::RevealedMine(_)) | Err(GameError::Unfinished) => (),
+            Err(GameError::RevealedMine(_)) => (),
             Err(e) => panic!("{e}"),
         }
         if LOGGING {
@@ -1960,7 +1962,7 @@ mod tests {
         ];
         match game.solve(CellCord(0, 0), true) {
             Ok(_) => (),
-            Err(GameError::RevealedMine(_)) | Err(GameError::Unfinished) => (),
+            Err(GameError::RevealedMine(_)) => (),
             Err(e) => panic!("{e}"),
         }
         game.save_state_info("test/FinalGameState.csv", true)
@@ -1988,11 +1990,8 @@ mod tests {
             match game.solve(CellCord(14, 7), true) {
                 Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
                 Ok(_) => *win_cnt.lock().unwrap() += 1,
-                // TODO handle cases when below occurs.
                 Err(GameError::Unfinished) => {
                     *unfinished_cnt.lock().unwrap() += 1;
-                    // dbg!(&game.state);
-                    // dbg!(&game.simulation.as_ref().unwrap().state);
                 }
                 Err(e) => panic!("{e}"),
             }
@@ -2059,7 +2058,6 @@ mod tests {
             Ok(_) => (),
             Err(GameError::RevealedMine(c)) => println!("Revealed mine at {c:?}"),
             Err(GameError::IncorrectFlag) => println!("A flag was incorrect."),
-            Err(GameError::Unfinished) => (),
             Err(e) => panic!("{e}"),
         }
         game.save_state_info("test/FinalGameState.csv", true)
@@ -2115,7 +2113,6 @@ mod tests {
             Ok(_) => (),
             Err(GameError::RevealedMine(c)) => println!("Revealed mine at {c:?}"),
             Err(GameError::IncorrectFlag) => println!("A flag was incorrect."),
-            Err(GameError::Unfinished) => (),
             Err(e) => panic!("{e}"),
         }
         game.save_state_info("test/FinalGameState.csv", true)
