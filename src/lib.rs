@@ -1743,10 +1743,9 @@ impl Game {
 mod tests {
     use super::*;
 
-    /// This test requires manual confirmation.
-    #[ignore]
+    #[ignore = "Requires manual confirmation."]
     #[test]
-    fn must_check_output_manually_record_screen_to_file() {
+    fn record_screen_to_file() {
         let mut capturer = setup_capturer(0).expect("Could not get a valid capturer.");
         let (width, height) = capturer.geometry();
         for i in 0..=5 {
@@ -1777,11 +1776,9 @@ mod tests {
         assert_eq!(all_positions.len(), 16 * 30);
     }
 
-    /// This test requires manual confirmation.
-    /// This test requires manually opening a copy of the game first.
-    #[ignore]
+    #[ignore = "Requires manual confirmation and having open game on screen first."]
     #[test]
-    fn open_game_first_click_1_1() {
+    fn click_1_1() {
         let game = Game::new(
             [
                 "cell_images/1.png",
@@ -1802,11 +1799,9 @@ mod tests {
         game.click_left_cell_cord(CellCord(1, 1));
     }
 
-    /// This test requires manually opening a copy of the game first.
-    /// This test requires partial manual confirmation.
-    #[ignore]
+    #[ignore = "Requires manual confirmation and having open game on screen first."]
     #[test]
-    fn open_game_first_reveal() {
+    fn reveal() {
         let mut game = Game::new(
             [
                 "cell_images/1.png",
@@ -1832,8 +1827,7 @@ mod tests {
         assert_eq!(*game.state_at_cord(place_to_click), CellKind::Explored);
     }
 
-    /// This test requires manual confirmation.
-    #[ignore]
+    #[ignore = "Requires manual confirmation."]
     #[test]
     fn manual_check_get_board_screenshot_from_screen_test() {
         let mut game = Game::new(
