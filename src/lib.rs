@@ -1644,7 +1644,16 @@ impl Game {
         if self.state.iter().contains(&CellKind::Unexplored) {
             // This situation can occur if a wall of mines separates the two section of the board because the frontier won't be able to pass the wall.
             // So start solution at a random unexplored cell which most likely be on the other side of the mine wall.
-            self.solve(offset_to_cell_cord(self.board_cell_width, self.state.iter().position(|&x| x==CellKind::Unexplored).unwrap()), simulate)
+            self.solve(
+                offset_to_cell_cord(
+                    self.board_cell_width,
+                    self.state
+                        .iter()
+                        .position(|&x| x == CellKind::Unexplored)
+                        .unwrap(),
+                ),
+                simulate,
+            )
         } else {
             Ok(())
         }
@@ -1971,23 +1980,23 @@ mod tests {
     // Test calculates win rate in simulation.
     // Mainly works to test that many runs don't panic.
     #[test]
-    fn simulate_win_rate() {
+    fn simulate_win_rate_one_cell() {
         use rayon::prelude::*;
         use std::sync::Mutex;
         let win_cnt = Mutex::new(0);
         let lose_cnt = Mutex::new(0);
         let unfinished_cnt = Mutex::new(0);
         let iteration_cnt;
+        let initial_guess = CellCord(2, 3);
         // 10x faster on release so 10x more iterations can be done.
         if cfg!(debug_assertions) {
             iteration_cnt = 1000;
-        }
-        else {
+        } else {
             iteration_cnt = 10000;
         }
         (0..iteration_cnt).into_par_iter().for_each(|_| {
-            let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
-            match game.solve(CellCord(14, 7), true) {
+            let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
+            match game.solve(initial_guess, true) {
                 Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
                 Ok(_) => *win_cnt.lock().unwrap() += 1,
                 Err(GameError::Unfinished) => {
@@ -2006,6 +2015,58 @@ mod tests {
             let winrate = winrate * 100f64;
             println!("Winrate: {winrate}");
         }
+    }
+
+    // Test calculates win rate in simulation per starting in each cell.
+    #[test]
+    #[ignore = "Takes very long to run"]
+    fn simulate_win_rate_per_cell() {
+        use rayon::prelude::*;
+        use std::sync::Mutex;
+        let iteration_cnt;
+        // 10x faster on release so 10x more iterations can be done.
+        if cfg!(debug_assertions) {
+            iteration_cnt = 10000;
+        } else {
+            iteration_cnt = 100000;
+        }
+        let mut winrates = vec![];
+        for i in 0..30 {
+            winrates.push(vec![0.; 16]);
+            for j in 0..16 {
+                {
+                    let win_cnt = Mutex::new(0);
+                    let lose_cnt = Mutex::new(0);
+                    let unfinished_cnt = Mutex::new(0);
+                    let initial_guess = CellCord(i, j);
+                    (0..iteration_cnt).into_par_iter().for_each(|_| {
+                        let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
+                        match game.solve(initial_guess, true) {
+                            Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
+                            Ok(_) => *win_cnt.lock().unwrap() += 1,
+                            Err(GameError::Unfinished) => {
+                                *unfinished_cnt.lock().unwrap() += 1;
+                            }
+                            Err(e) => panic!("{e}"),
+                        }
+                    });
+                    {
+                        println!("Initial guess {initial_guess:?}");
+                        println!("Win count: {}.", win_cnt.lock().unwrap());
+                        println!("Lose count: {}.", lose_cnt.lock().unwrap());
+                        println!("Unfinished count: {}.", unfinished_cnt.lock().unwrap());
+                        *lose_cnt.lock().unwrap() += *unfinished_cnt.lock().unwrap();
+                        let win_cnt = *win_cnt.lock().unwrap();
+                        let winrate = win_cnt as f64 / (win_cnt + *lose_cnt.lock().unwrap()) as f64;
+                        let winrate = winrate * 100f64;
+                        println!("Winrate: {winrate}");
+
+                        winrates[i][j] = winrate;
+                    }
+                }
+            }
+        }
+        println!("{winrates:?}");
     }
 
     // Test to figure out 'ERROR at self.cell_groups[5]=CellGroup { offsets: {}, mine_num: 1 } has more mines than cells to fill. Just removed 365' issue.
