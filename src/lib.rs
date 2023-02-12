@@ -1375,7 +1375,9 @@ impl Game {
             }
             // If the chance of a mine is zero then it is guaranteed to not have a mine and should be revealed regardless.
             // Better to miss actual 0% from floating point error than to generate incorrect 0%
-            else if chance_of_mine_at_position < f64::EPSILON {
+            else if chance_of_mine_at_position.abs()
+                < chance_of_mine_at_position.abs() * f64::EPSILON
+            {
                 *least_likelihood = 0.0;
                 least_likely_positions.push(*offset);
             }
