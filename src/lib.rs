@@ -1341,6 +1341,7 @@ impl Game {
     }
 
     fn update_likelihoods_from_enumerated_arrangements(
+        &self,
         most_likely_positions: &mut Vec<usize>,
         most_likelihood: &mut f64,
         least_likely_positions: &mut Vec<usize>,
@@ -1368,6 +1369,19 @@ impl Game {
                 *most_likelihood = 1.0;
                 most_likely_positions.push(*offset);
             }
+            // If neither larger than previous nor garrunteed mine then check if new is is a corner position. If yes then that is new guess target. Supposedly this increases winrate.
+            else if f64::abs(chance_of_mine_at_position - *most_likelihood)
+                <= chance_of_mine_at_position.abs().max(most_likelihood.abs()) * f64::EPSILON
+            {
+                let cord = self.offset_to_cell_cord(*offset);
+                // New item is corner.
+                if (cord.0 == 0 || cord.0 == (self.board_cell_width - 1).try_into().unwrap())
+                    && (cord.1 == 0 || cord.1 == (self.board_cell_height - 1).try_into().unwrap())
+                {
+                    *most_likelihood = chance_of_mine_at_position;
+                    *most_likely_positions = vec![*offset];
+                }
+            }
             // Same thing but for leastlikelyhood.
             if chance_of_mine_at_position < *least_likelihood {
                 *least_likelihood = chance_of_mine_at_position;
@@ -1380,6 +1394,19 @@ impl Game {
             {
                 *least_likelihood = 0.0;
                 least_likely_positions.push(*offset);
+            }
+            // If neither larger than previous nor garrunteed mine then check if new is is a corner position. If yes then that is new guess target. Supposedly this increases winrate.
+            else if f64::abs(chance_of_mine_at_position - *least_likelihood)
+                <= chance_of_mine_at_position.abs().max(least_likelihood.abs()) * f64::EPSILON
+            {
+                let cord = self.offset_to_cell_cord(*offset);
+                // New item is corner.
+                if (cord.0 == 0 || cord.0 == (self.board_cell_width - 1).try_into().unwrap())
+                    && (cord.1 == 0 || cord.1 == (self.board_cell_height - 1).try_into().unwrap())
+                {
+                    *least_likelihood = chance_of_mine_at_position;
+                    *least_likely_positions = vec![*offset];
+                }
             }
         }
     }
@@ -1543,7 +1570,7 @@ impl Game {
                 dbg!(sub_group);
                 panic!("There were no valid combinations!")
             }
-            Game::update_likelihoods_from_enumerated_arrangements(
+            self.update_likelihoods_from_enumerated_arrangements(
                 &mut most_likely_positions,
                 &mut most_likelihood,
                 &mut least_likely_positions,
