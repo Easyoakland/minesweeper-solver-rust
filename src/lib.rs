@@ -1446,7 +1446,7 @@ impl Game {
     /// Make best guess from all possibilities.
     /// # Panics
     /// If it can't find a valid move then a divide by zero will occur. This should panic.
-    fn probabalistic_guess(&mut self, simulate: bool) -> u32 {
+    fn probabilistic_guess(&mut self, simulate: bool) -> u32 {
         let mut did_something = 0;
 
         // Keep track of the most and least likely places for there to be a mine and the likelyhood of each.
@@ -1637,7 +1637,7 @@ impl Game {
                     print!("Guess required. ");
                 }
                 self.process_action_stack(simulate)?;
-                if self.probabalistic_guess(simulate) >= 1 {
+                if self.probabilistic_guess(simulate) >= 1 {
                     did_something += 1;
                     continue;
                 }
