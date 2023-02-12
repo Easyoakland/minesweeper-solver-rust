@@ -64,6 +64,7 @@ pub enum GameError {
     IncorrectFlag,
     UnidentifiedCell(CellCord),
     Unfinished,
+    NoValidCombinations,
 }
 
 impl Error for GameError {}
@@ -78,6 +79,7 @@ impl fmt::Display for GameError {
                 "The game was unable to be finished for an unknown reason."
             ),
             Self::IncorrectFlag => write!(f, "One of the flags is incorrect."),
+            Self::NoValidCombinations => write!(f, "No valid combinations."),
         }
     }
 }
@@ -1339,59 +1341,111 @@ impl Game {
     }
 
     fn update_likelihoods_from_enumerated_arrangements(
-        mut most_likely_positions: Vec<usize>,
-        mut most_likelihood: f64,
-        mut least_likely_positions: Vec<usize>,
-        mut least_likelihood: f64,
+        most_likely_positions: &mut Vec<usize>,
+        most_likelihood: &mut f64,
+        least_likely_positions: &mut Vec<usize>,
+        least_likelihood: &mut f64,
         number_of_valid_combinations: i32,
         occurrences_of_mine_per_offset: &HashMap<usize, i32>,
-    ) -> Option<(Vec<usize>, f64, Vec<usize>, f64)> {
-        // If there was a valid combination.
-        if number_of_valid_combinations > 0 {
-            // Enumerate offsets and chances of those offsets.
-            for (offset, occurrence_of_mine_at_offset) in occurrences_of_mine_per_offset.iter() {
-                // The chance a mine is somewhere is the amount of combinations a mine occurred in that position divided by how many valid combinations there are total.
-                let chance_of_mine_at_position: f64 = f64::from(*occurrence_of_mine_at_offset)
-                    / f64::from(number_of_valid_combinations);
+    ) {
+        // Enumerate offsets and chances of those offsets.
+        for (offset, occurrence_of_mine_at_offset) in occurrences_of_mine_per_offset.iter() {
+            // The chance a mine is somewhere is the amount of combinations a mine occurred in that position divided by how many valid combinations there are total.
+            let chance_of_mine_at_position: f64 =
+                f64::from(*occurrence_of_mine_at_offset) / f64::from(number_of_valid_combinations);
 
-                if chance_of_mine_at_position > most_likelihood {
-                    // If likelyhood of mine is higher than previously recorded.
-                    // Update likelyhood
-                    // and update position with highest likelyhood.
-                    most_likelihood = chance_of_mine_at_position;
-                    most_likely_positions = vec![*offset];
+            if chance_of_mine_at_position > *most_likelihood {
+                // If likelyhood of mine is higher than previously recorded.
+                // Update likelyhood
+                // and update position with highest likelyhood.
+                *most_likelihood = chance_of_mine_at_position;
+                *most_likely_positions = vec![*offset];
+            }
+            // If the likelyhood is 100% then add it anyway because 100% means theres a mine for sure and it should be flagged regardless.
+            // It is better to miss 100% to floating point error than to generate an incorrect 100%.
+            else if f64::abs(chance_of_mine_at_position - 1.0) < f64::EPSILON {
+                // update likelyhood and append position of garrunteed mine.
+                *most_likelihood = 1.0;
+                most_likely_positions.push(*offset);
+            }
+            // Same thing but for leastlikelyhood.
+            if chance_of_mine_at_position < *least_likelihood {
+                *least_likelihood = chance_of_mine_at_position;
+                *least_likely_positions = vec![*offset];
+            }
+            // If the chance of a mine is zero then it is guaranteed to not have a mine and should be revealed regardless.
+            // Better to miss actual 0% from floating point error than to generate incorrect 0%
+            else if chance_of_mine_at_position < f64::EPSILON {
+                *least_likelihood = 0.0;
+                least_likely_positions.push(*offset);
+            }
+        }
+    }
+
+    fn act_on_probabilities(
+        &mut self,
+        most_likelihood: f64,
+        most_likely_positions: Vec<usize>,
+        least_likelihood: f64,
+        least_likely_positions: Vec<usize>,
+        simulate: bool,
+        did_something: &mut u32,
+    ) {
+        // If know where a mine or multiple are with certainty then flag each place that is definitely a mine.
+        if f64::abs(most_likelihood - 1.0) <= f64::EPSILON {
+            for most_likely_position in most_likely_positions {
+                if LOGGING {
+                    println!(
+                        "Flagging {:?} with odds {:?} of being mine.",
+                        self.offset_to_cell_cord(most_likely_position),
+                        most_likelihood
+                    );
+                    if simulate {
+                        if self
+                            .simulation
+                            .as_ref()
+                            .unwrap()
+                            .is_mine(most_likely_position)
+                        {
+                            println!("This is correct for the simulation");
+                        } else {
+                            println! {"This is incorrect for the simulation"};
+                        }
+                    }
                 }
-                // If the likelyhood is 100% then add it anyway because 100% means theres a mine for sure and it should be flagged regardless.
-                // It is better to miss 100% to floating point error than to generate an incorrect 100%.
-                else if f64::abs(chance_of_mine_at_position - 1.0) < f64::EPSILON {
-                    // update likelyhood and append position of garrunteed mine.
-                    most_likelihood = 1.0;
-                    most_likely_positions.push(*offset);
+                let cord = self.offset_to_cell_cord(most_likely_position);
+                if !simulate {
+                    self.flag(cord);
+                } else if simulate {
+                    self.flag_simulation(cord);
                 }
-                // Same thing but for leastlikelyhood.
-                if chance_of_mine_at_position < least_likelihood {
-                    least_likelihood = chance_of_mine_at_position;
-                    least_likely_positions = vec![*offset];
+                *did_something += 1;
+            }
+        }
+        // If there wasn't a spot that had a definite mine.
+        // Then reveal all spots with lowest odds of mine.
+        else {
+            for least_likely_position in least_likely_positions {
+                if LOGGING {
+                    println!(
+                        "Revealing {:?} with odds {:?} of being mine",
+                        self.offset_to_cell_cord(least_likely_position),
+                        least_likelihood
+                    );
                 }
-                // If the chance of a mine is zero then it is guaranteed to not have a mine and should be revealed regardless.
-                // Better to miss actual 0% from floating point error than to generate incorrect 0%
-                else if chance_of_mine_at_position < f64::EPSILON {
-                    least_likelihood = 0.0;
-                    least_likely_positions.push(*offset);
+                if !simulate {
+                    self.reveal(self.offset_to_cell_cord(least_likely_position));
+                } else if simulate {
+                    self.reveal_simulation(self.offset_to_cell_cord(least_likely_position));
                 }
             }
-            Some((
-                most_likely_positions,
-                most_likelihood,
-                least_likely_positions,
-                least_likelihood,
-            ))
-        } else {
-            None
+            *did_something += 1;
         }
     }
 
     /// Make best guess from all possibilities.
+    /// # Panics
+    /// If it can't find a valid move then a divide by zero will occur. This should panic.
     fn probabalistic_guess(&mut self, simulate: bool) -> u32 {
         let mut did_something = 0;
 
@@ -1480,81 +1534,31 @@ impl Game {
                     &sub_group_total_offsets_after_overlaps_removed,
                     &sub_group,
                 );
-
-            let Some(x)  = Game::update_likelihoods_from_enumerated_arrangements(
-                most_likely_positions,
-                most_likelihood,
-                least_likely_positions,
-                least_likelihood,
+            if number_of_valid_combinations <= 0 {
+                self.save_state_info("test/FinalGameState.csv", simulate);
+                dbg!(sub_group_mine_num_lower_limit);
+                dbg!(sub_group_mine_num_upper_limit);
+                dbg!(sub_group);
+                panic!("There were no valid combinations!")
+            }
+            Game::update_likelihoods_from_enumerated_arrangements(
+                &mut most_likely_positions,
+                &mut most_likelihood,
+                &mut least_likely_positions,
+                &mut least_likelihood,
                 number_of_valid_combinations,
                 &occurrences_of_mine_per_offset,
-            ) else {
-                    self.save_state_info("test/FinalGameState.csv", simulate);
-                    dbg!(sub_group_mine_num_lower_limit);
-                    dbg!(sub_group_mine_num_upper_limit);
-                    dbg!(sub_group);
-                    panic!("There were no valid combinations!")
-                };
-            (
-                most_likely_positions,
-                most_likelihood,
-                least_likely_positions,
-                least_likelihood,
-            ) = x;
+            );
         }
 
-        // TODO make code below new function. START -------------------------------------------------------------
-        // If know where a mine or multiple are with certainty then flag each place that is definitely a mine.
-        if f64::abs(most_likelihood - 1.0) <= f64::EPSILON {
-            for most_likely_position in most_likely_positions {
-                if LOGGING {
-                    println!(
-                        "Flagging {:?} with odds {:?} of being mine.",
-                        self.offset_to_cell_cord(most_likely_position),
-                        most_likelihood
-                    );
-                    if simulate {
-                        if self
-                            .simulation
-                            .as_ref()
-                            .unwrap()
-                            .is_mine(most_likely_position)
-                        {
-                            println!("This is correct for the simulation")
-                        } else {
-                            println! {"This is incorrect for the simulation"}
-                        }
-                    }
-                }
-                let cord = self.offset_to_cell_cord(most_likely_position);
-                if !simulate {
-                    self.flag(cord);
-                } else if simulate {
-                    self.flag_simulation(cord);
-                }
-                did_something += 1;
-            }
-        }
-        // If there wasn't a spot that had a definite mine.
-        // Then reveal all spots with lowest odds of mine.
-        else {
-            for least_likely_position in least_likely_positions {
-                if LOGGING {
-                    println!(
-                        "Revealing {:?} with odds {:?} of being mine",
-                        self.offset_to_cell_cord(least_likely_position),
-                        least_likelihood
-                    );
-                }
-                if !simulate {
-                    self.reveal(self.offset_to_cell_cord(least_likely_position));
-                } else if simulate {
-                    self.reveal_simulation(self.offset_to_cell_cord(least_likely_position));
-                }
-            }
-            did_something += 1;
-        }
-        // TODO new function END -------------------------------------------------------------
+        self.act_on_probabilities(
+            most_likelihood,
+            most_likely_positions,
+            least_likelihood,
+            least_likely_positions,
+            simulate,
+            &mut did_something,
+        );
 
         did_something
     }
@@ -1624,7 +1628,7 @@ impl Game {
                     .collect();
                 if !problem_cell_groups.is_empty() {
                     self.save_state_info("test/FinalGameStateBefore.csv", true);
-                    println!("Cell Group created with more bombs than than actually exist. Problematic groups are {problem_cell_groups:#?}.\n Cell Groups should be:\n{actual_cell_groups:#?}")
+                    println!("Cell Group created with more bombs than than actually exist. Problematic groups are {problem_cell_groups:#?}.\n Cell Groups should be:\n{actual_cell_groups:#?}");
                 }
             }
 
