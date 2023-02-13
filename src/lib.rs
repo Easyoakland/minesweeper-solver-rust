@@ -15,9 +15,10 @@ use std::{
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
 const MAX_COMBINATIONS: u128 = 2_000_000;
+const REMAINING_FOR_ENDGAME: usize = 24;
 const LOGGING: bool = false;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct Point(pub i32, pub i32);
 
 impl Add for Point {
@@ -269,7 +270,7 @@ fn remove_complete_cell_group_overlaps(
 }
 
 const CELL_VARIANT_COUNT: usize = 11;
-#[derive(Debug, Copy, Clone, PartialEq, Sequence)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Sequence)]
 enum CellKind {
     One,
     Two,
@@ -398,6 +399,8 @@ where
 /// ```
 #[must_use]
 pub fn factorial(n: u128) -> u128 {
+    // 34! is almost exactly small enough to fit in u128. 35! overflows.
+    assert!(n <= 34);
     (2..(n + 1)).product()
 }
 
@@ -591,6 +594,7 @@ impl Simulation {
 }
 
 /// Holds the information related to the current state of the game.
+#[derive(Default)]
 pub struct Game {
     cell_images: Vec<RgbImage>,
     state: Vec<CellKind>,
@@ -609,6 +613,8 @@ pub struct Game {
     cell_groups: Vec<CellGroup>,
     simulation: Option<Simulation>,
     action_stack: Vec<CellCord>,
+    mine_num: u32,
+    endgame: bool,
     /* board_screenshot_vec: Vec<u8>, */
 }
 
@@ -621,6 +627,7 @@ impl Game {
     #[must_use]
     pub fn build(
         cell_files: [&str; CELL_VARIANT_COUNT],
+        mine_num: u32,
         screenshot: RgbImage,
         capturer: Capturer,
     ) -> Game {
@@ -688,6 +695,7 @@ impl Game {
 
         Game {
             cell_images,
+            mine_num,
             state,
             cell_positions,
             board_px_width: px_width,
@@ -703,6 +711,7 @@ impl Game {
             cell_groups: Vec::new(),
             simulation: None,
             action_stack: Vec::new(),
+            ..Game::default()
         }
     }
 
@@ -710,11 +719,11 @@ impl Game {
     /// # Panics
     /// If can't setup screen capture.
     #[must_use]
-    pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], id: usize) -> Game {
+    pub fn new(cell_files: [&str; CELL_VARIANT_COUNT], mine_num: u32, id: usize) -> Game {
         let mut capturer = setup_capturer(id)
             .unwrap_or_else(|e| panic!("Can't setup a screen capturer because: {e}."));
         let screenshot = capture_image_frame(&mut capturer);
-        Game::build(cell_files, screenshot, capturer)
+        Game::build(cell_files, mine_num, screenshot, capturer)
     }
 
     /// Sets up the `Game` so that it can run a simulation of solving a real game.
@@ -733,8 +742,6 @@ impl Game {
         mine_num: u32,
         initial_guess: CellCord,
     ) -> Game {
-        // Finds the initial positions of the cells in the game grid.
-        let board_screenshot = RgbImage::from_vec(0, 0, vec![]).unwrap();
         // Initializes state as all unexplored.
         let state = vec![CellKind::Unexplored; (board_cell_height * board_cell_width) as usize];
         let simulation = Some(Simulation::new(
@@ -745,23 +752,15 @@ impl Game {
         ));
         Game {
             simulation,
+            mine_num,
             board_cell_height,
             board_cell_width,
             state,
             frontier: Vec::new(),
             cell_groups: Vec::new(),
             action_stack: Vec::new(),
-            // Below are all set to whatever (0 mostly) because they don't impact the simulation.
-            // They are primarily parameters of the screen and image of the board.
-            cell_positions: Vec::new(),
-            cell_images: Vec::new(),
-            board_px_height: 0,
-            board_px_width: 0,
-            capturer: None,
-            board_screenshot,
-            top_left: Point(0, 0),
-            individual_cell_width: 0,
-            individual_cell_height: 0,
+            // Other parameters don't matter in simulation.
+            ..Game::default()
         }
     }
     /// Sets the board screenshot of Game to just the board of tiles. Crops out extra stuff.
@@ -1066,20 +1065,43 @@ impl Game {
             }
             return;
         }
-        // Since the cell is flaggable flag it...
+        // Since the cell is flaggable, flag it...
         self.click_right_cell_cord(cord);
         // ...and update the internal state of that cell to match.
         *self.state_at_cord(cord) = CellKind::Flag;
+        self.mine_num -= 1;
     }
 
     /// Flag cell at cord then update cell state at location to flag.
     fn flag_simulation(&mut self, cord: CellCord) {
         // Don't do anything if the cell isn't flaggable.
-        if LOGGING && *self.state_at_cord_imm(cord) != CellKind::Unexplored {
-            println!("Tried flagging a non flaggable at: {cord:#?}");
+        if *self.state_at_cord_imm(cord) != CellKind::Unexplored {
+            if LOGGING {
+                println!("Tried flagging a non flaggable at: {cord:#?}");
+            }
+            return;
         }
         // Update the internal state of that cell to match.
         *self.state_at_cord(cord) = CellKind::Flag;
+        self.mine_num -= 1;
+
+        if LOGGING {
+            let sim_mine_num = self
+                .simulation
+                .as_ref()
+                .unwrap()
+                .state
+                .iter()
+                .enumerate()
+                .filter(|(i, &x)| x && self.state[*i] == CellKind::Unexplored)
+                .count();
+            if sim_mine_num != self.mine_num.try_into().unwrap() {
+                {
+                    self.save_state_info("test/FinalGameState.csv", true);
+                    panic!("[Error] When flagging {cord:?} simulation has different mine num ({sim_mine_num:?}) then internal state ({})!", self.mine_num);
+                }
+            }
+        }
     }
 
     /// Rule 1 implemented with sets. If the amount of mines in a set is the same as the amount of cells in a set, they are all mines.
@@ -1666,6 +1688,37 @@ impl Game {
                     print!("Guess required. ");
                 }
                 self.process_action_stack(simulate)?;
+
+                // Handle endgame case. If unexplored is small enough add them as a cell_group for more potential deterministic solutions.
+                if !self.endgame
+                    && self
+                        .state
+                        .iter()
+                        .filter(|&&x| x == CellKind::Unexplored)
+                        .count()
+                        <= REMAINING_FOR_ENDGAME
+                {
+                    self.cell_groups.push(CellGroup {
+                        offsets: self
+                            .state
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, &x)| x == CellKind::Unexplored)
+                            .map(|(offset, _)| offset)
+                            .collect::<HashSet<_>>(),
+                        mine_num: self.mine_num,
+                    });
+                    self.endgame = true;
+                    if LOGGING {
+                        println!(
+                            "Added endgame cell_group: {:?}",
+                            self.cell_groups.last().unwrap()
+                        );
+                    }
+                    // Might be able to do deterministic solution now that endgame cell group was added.
+                    did_something += 1;
+                    continue;
+                }
                 if self.probabilistic_guess(simulate) >= 1 {
                     did_something += 1;
                     continue;
@@ -1826,6 +1879,7 @@ mod tests {
                 "cell_images/cell.png",
                 "cell_images/complete.png",
             ],
+            99,
             0,
         );
 
@@ -1849,6 +1903,7 @@ mod tests {
                 "cell_images/cell.png",
                 "cell_images/complete.png",
             ],
+            99,
             0,
         );
         let place_to_click = CellCord(7, 7);
@@ -1877,6 +1932,7 @@ mod tests {
                 "cell_images/cell.png",
                 "cell_images/complete.png",
             ],
+            99,
             0,
         );
         game.get_board_screenshot_from_screen();
@@ -1904,6 +1960,7 @@ mod tests {
                 "cell_images/cell.png",
                 "cell_images/complete.png",
             ],
+            99,
             read_image("test_in/subimage_search/board.png").to_rgb8(),
             setup_capturer(0).expect("Could not get a valid capturer."),
         );

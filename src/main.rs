@@ -1,6 +1,6 @@
-use minesweeper_solver_in_rust::{Game, CellCord};
+use minesweeper_solver_in_rust::{CellCord, Game};
 
-fn main(){
+fn main() {
     let mut game = Game::new(
         [
             "cell_images/1.png",
@@ -15,10 +15,11 @@ fn main(){
             "cell_images/cell.png",
             "cell_images/complete.png",
         ],
+        99,
         0,
     );
 
-    if let Err(e) = game.solve(CellCord(0,0), false) {
+    if let Err(e) = game.solve(CellCord(0, 0), false) {
         panic!("{e}");
     }
     game.save_state_info("test/FinalGameState.csv", false);
