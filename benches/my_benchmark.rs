@@ -1,6 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use image::io;
-use minesweeper_solver_in_rust::{locate_all, Game, read_image, setup_capturer};
+use minesweeper_solver_in_rust::{locate_all, read_image, setup_capturer, Game};
+use rand::{seq::SliceRandom, thread_rng};
+use std::collections::HashSet;
 
 /* fn fibonacci(n: u64) -> u64 {
     /*     match n {
@@ -57,6 +59,7 @@ fn test_identify_cell_benchmark(c: &mut Criterion) {
             "cell_images/cell.png",
             "cell_images/complete.png",
         ],
+        99,
         read_image("test_in/subimage_search/board.png").to_rgb8(),
         setup_capturer(0).expect("Could not get a valid capturer."),
     );
@@ -65,5 +68,57 @@ fn test_identify_cell_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, test_board_sub_image_search_benchmark, test_identify_cell_benchmark);
+fn sort_binary_or_linear_or_hashmap(c: &mut Criterion) {
+    let list1 = HashSet::from([1, 2, 3, 4, 5, 6, 7, 200, 12, 10, 12, 13, 14, 15, 16]);
+    let mut list2 = [7, 6, 5, 4, 3, 2, 1, 99, 88];
+    fn linear_test(list1: &HashSet<i32>, list2: [i32; 9]) -> i32 {
+        let mut count = 0;
+        for item in list1 {
+            if list2.contains(&item) {
+                count += 1;
+            }
+        }
+        count
+    }
+    fn binary_test(list1: &HashSet<i32>, list2: [i32; 9]) -> i32 {
+        let mut count = 0;
+        for item in list1 {
+            if let Ok(_) = list2.binary_search(&item) {
+                count += 1;
+            }
+        }
+        count
+    }
+    fn hashmap_test(list1: &HashSet<i32>, list2: [i32; 9]) -> i32 {
+        let mut count = 0;
+        let list2 = HashSet::from(list2);
+        for item in list1 {
+            if list2.contains(&item) {
+                count += 1;
+            }
+        }
+        count
+    }
+    let mut rng = thread_rng();
+    c.bench_function("linear itersection count", |b| {
+        list2.shuffle(&mut rng);
+        b.iter(|| linear_test(&list1, list2));
+    });
+    c.bench_function("binary sort itersection count", |b| {
+        list2.shuffle(&mut rng);
+        list2.sort();
+        b.iter(|| binary_test(&list1, list2));
+    });
+    c.bench_function("Hashmap itersection count", |b| {
+        list2.shuffle(&mut rng);
+        b.iter(|| hashmap_test(&list1, list2));
+    });
+}
+
+criterion_group!(
+    benches,
+    test_board_sub_image_search_benchmark,
+    test_identify_cell_benchmark,
+    sort_binary_or_linear_or_hashmap
+);
 criterion_main!(benches);
