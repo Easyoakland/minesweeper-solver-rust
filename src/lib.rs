@@ -15,7 +15,6 @@ use std::{
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
 const MAX_COMBINATIONS: u128 = 2_000_000;
-const REMAINING_FOR_ENDGAME: usize = 24;
 const LOGGING: bool = false;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
@@ -155,11 +154,6 @@ pub fn capture_image_frame(capturer: &mut Capturer) -> RgbImage {
     )
     .expect("Frame was unable to be captured and converted to RGB.")
 }
-
-/* /// Captures and returns a screenshot as RgbImage.
-pub fn capture_image_frame_in_place(capturer: &mut Capturer, rgb_vec: &mut Vec<u8>) {
-    capture_rgb_frame_in_place(capturer, rgb_vec);
-} */
 
 /// Saves an RGB image vector to a the given path.
 pub fn save_rgb_vector(path: &str, buffer: Vec<u8>, width: u32, height: u32) {
@@ -391,17 +385,125 @@ where
     result
 }
 
-/// Simple factorial calculation for positive integers.
+/// Simple factorial calculation for positive integers. If value would saturate instead returns max for datatype.
 /// # Examples
 /// ```
-/// use minesweeper_solver_in_rust::factorial;
-/// assert_eq!(factorial(3), 6);
+/// use minesweeper_solver_in_rust::saturating_factorial;
+/// assert_eq!(saturating_factorial(3), 6);
+/// assert_eq!(saturating_factorial(10000), u128::MAX);
+/// assert_eq!(saturating_factorial(35), u128::MAX);
 /// ```
 #[must_use]
-pub fn factorial(n: u128) -> u128 {
-    // 34! is almost exactly small enough to fit in u128. 35! overflows.
-    assert!(n <= 34);
-    (2..(n + 1)).product()
+pub fn saturating_factorial(n: u32) -> u64 {
+    dbg!(&n);
+    // 12! is almost exactly small enough to fit in u64. 13! overflows.
+    if n > 12 {
+        u64::MAX
+    } else {
+        (2u64..(n as u64 + 1u64)).product::<u64>().into()
+    }
+}
+
+/// Gets all factors of input.
+/// ```
+/// use minesweeper_solver_in_rust::prime_factorize;
+/// assert_eq!(prime_factorize(5), vec![5]);
+/// assert_eq!(prime_factorize(9), vec![3, 3]);
+/// assert_eq!(prime_factorize(1201*1213), vec![1201, 1213]);
+/// ```
+#[must_use]
+pub fn prime_factorize(mut n: u32) -> Vec<u32> {
+    let mut out = vec![];
+
+    for i in 2..(n + 1) {
+        while n % i == 0 {
+            n /= i;
+            out.push(i);
+        }
+    }
+    if out.is_empty() {
+        out.extend_from_slice(&[1, n]);
+    }
+
+    out
+}
+
+/// takes product and saturates at bound
+#[must_use]
+pub fn saturating_product<I: Iterator<Item = u32>>(mut iter: I) -> u64 {
+    let mut out = 1u64;
+    while let Some(item) = iter.next() {
+        out = match out.checked_mul(item as u64) {
+            Some(x) => x,
+            None => return u64::MAX,
+        }
+    }
+    out
+}
+
+/// Simple combination calculation for positive values. Returns as float approximation.
+/// If denominator saturates will get larger than expected value.
+/// # Examples
+/// ```
+/// use minesweeper_solver_in_rust::combinations;
+/// assert_eq!(combinations(5, 4), 5);
+/// assert_eq!(combinations(12, 6), 924);
+/// assert!(dbg!(combinations(34, 17)) > 2333600000 && combinations(34, 17) < 2333610000);
+/// assert!(dbg!(combinations(50, 25)) == 126410606437752);
+/// ```
+#[must_use]
+pub fn saturating_combinations(n: u32, r: u32) -> u128 {
+    let mut numerator = (1..=n).flat_map(prime_factorize).collect::<Vec<u32>>();
+    let mut denominator1 = (1..=r).flat_map(prime_factorize).collect::<Vec<u32>>();
+    let mut denominator2 = (1..=(n - r))
+        .flat_map(prime_factorize)
+        .collect::<Vec<u32>>();
+
+    // Remove replicated items in denominator1
+    let mut i = 0;
+    while i < numerator.len() {
+        i += 1;
+        if let Some(idx) = denominator1.iter().position(|&x| x == numerator[i - 1]) {
+            if numerator.len() > 1 {
+                numerator.swap_remove(i - 1);
+            } else {
+                numerator[0];
+                break;
+            }
+            if denominator1.len() > 1 {
+                denominator1.swap_remove(idx);
+            } else {
+                denominator1[0] = 1;
+                break;
+            }
+            i -= 1;
+        }
+    }
+    // Remove replicated items in denominator2
+    let mut i = 0;
+    while i < numerator.len() {
+        i += 1;
+        if let Some(idx) = denominator2.iter().position(|&x| x == numerator[i - 1]) {
+            if numerator.len() > 1 {
+                numerator.swap_remove(i - 1);
+            } else {
+                numerator[0];
+                break;
+            }
+            if denominator2.len() > 1 {
+                denominator2.swap_remove(idx);
+            } else {
+                denominator2[0] = 1;
+                break;
+            }
+            i -= 1;
+        }
+    }
+
+    ((saturating_product(numerator.iter().map(|&x| u32::from(x))) as u128)
+        / (saturating_product(denominator1.iter().map(|&x| u32::from(x)))
+            * saturating_product(denominator2.iter().map(|&x| u32::from(x)))) as u128)
+        .into()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1558,13 +1660,14 @@ impl Game {
             for sub_group_mine_num in
                 0.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
             {
-                // Calculate the amount of combinations. Integer division means it might be off by one but that doesn't matter.
-                let combination_amount =
-                    factorial(sub_group_total_offsets_after_overlaps_removed.len() as u128)
-                        / (factorial(
-                            sub_group_total_offsets_after_overlaps_removed.len() as u128
-                                - sub_group_mine_num as u128,
-                        ) * factorial(sub_group_mine_num as u128));
+                // Calculate the amount of combinations.
+                let combination_amount = saturating_combinations(
+                    sub_group_total_offsets_after_overlaps_removed
+                        .len()
+                        .try_into()
+                        .unwrap(),
+                    sub_group_mine_num.try_into().unwrap(),
+                );
                 combination_total += combination_amount;
 
                 // If there are too many combinations then abort calculation.
@@ -1690,34 +1793,39 @@ impl Game {
                 self.process_action_stack(simulate)?;
 
                 // Handle endgame case. If unexplored is small enough add them as a cell_group for more potential deterministic solutions.
-                if !self.endgame
-                    && self
+                if !self.endgame {
+                    let unexplored_count = self
                         .state
                         .iter()
                         .filter(|&&x| x == CellKind::Unexplored)
-                        .count()
-                        <= REMAINING_FOR_ENDGAME
-                {
-                    self.cell_groups.push(CellGroup {
-                        offsets: self
-                            .state
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, &x)| x == CellKind::Unexplored)
-                            .map(|(offset, _)| offset)
-                            .collect::<HashSet<_>>(),
-                        mine_num: self.mine_num,
-                    });
-                    self.endgame = true;
-                    if LOGGING {
-                        println!(
-                            "Added endgame cell_group: {:?}",
-                            self.cell_groups.last().unwrap()
-                        );
+                        .count();
+                    // If the number of combinations added by the endgame cell group is less than the max combinations then add it.
+                    if saturating_combinations(
+                        unexplored_count.try_into().unwrap(),
+                        self.mine_num.try_into().unwrap(),
+                    ) <= MAX_COMBINATIONS as u128
+                    {
+                        self.cell_groups.push(CellGroup {
+                            offsets: self
+                                .state
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, &x)| x == CellKind::Unexplored)
+                                .map(|(offset, _)| offset)
+                                .collect::<HashSet<_>>(),
+                            mine_num: self.mine_num,
+                        });
+                        self.endgame = true;
+                        if LOGGING {
+                            println!(
+                                "Added endgame cell_group: {:?}",
+                                self.cell_groups.last().unwrap()
+                            );
+                        }
+                        // Might be able to do deterministic solution now that endgame cell group was added.
+                        did_something += 1;
+                        continue;
                     }
-                    // Might be able to do deterministic solution now that endgame cell group was added.
-                    did_something += 1;
-                    continue;
                 }
                 if self.probabilistic_guess(simulate) >= 1 {
                     did_something += 1;
@@ -2074,9 +2182,9 @@ mod tests {
         let initial_guess = CellCord(2, 3);
         // 10x faster on release so 10x more iterations can be done.
         if cfg!(debug_assertions) {
-            iteration_cnt = 1000;
+            iteration_cnt = 1_000;
         } else {
-            iteration_cnt = 10000;
+            iteration_cnt = 10_000;
         }
         (0..iteration_cnt).into_par_iter().for_each(|_| {
             let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
@@ -2110,9 +2218,9 @@ mod tests {
         let iteration_cnt;
         // 10x faster on release so 10x more iterations can be done.
         if cfg!(debug_assertions) {
-            iteration_cnt = 10000;
+            iteration_cnt = 10_000;
         } else {
-            iteration_cnt = 100000;
+            iteration_cnt = 100_000;
         }
         let mut winrates = vec![];
         for i in 0..30 {
