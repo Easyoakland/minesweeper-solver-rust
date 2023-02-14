@@ -22,10 +22,8 @@ name = "framerate_benchmarks"
 harness = false
 
 [dependencies]
-# scrap = "0.5.0"
 captrs = "0.3.1"
 image = "0.24.0"
-# imageproc = "0.23.0"
 enigo = "0.0.14"
 enum-iterator = "1.2.0"
 itertools = "0.10.5"
