@@ -428,7 +428,7 @@ pub fn prime_factorize(mut n: u32) -> Vec<u32> {
     out
 }
 
-/// takes product and saturates at bound
+/// Calculates from iter and saturates at bound.
 #[must_use]
 pub fn saturating_product<I: Iterator<Item = u32>>(mut iter: I) -> u64 {
     let mut out = 1u64;
@@ -445,11 +445,11 @@ pub fn saturating_product<I: Iterator<Item = u32>>(mut iter: I) -> u64 {
 /// If denominator saturates will get larger than expected value.
 /// # Examples
 /// ```
-/// use minesweeper_solver_in_rust::combinations;
-/// assert_eq!(combinations(5, 4), 5);
-/// assert_eq!(combinations(12, 6), 924);
-/// assert!(dbg!(combinations(34, 17)) > 2333600000 && combinations(34, 17) < 2333610000);
-/// assert!(dbg!(combinations(50, 25)) == 126410606437752);
+/// use minesweeper_solver_in_rust::saturating_combinations;
+/// assert_eq!(saturating_combinations(5, 4), 5);
+/// assert_eq!(saturating_combinations(12, 6), 924);
+/// assert!(saturating_combinations(34, 17) > 2333600000 && saturating_combinations(34, 17) < 2333610000);
+/// assert!(saturating_combinations(50, 25) == 126410606437752);
 /// ```
 #[must_use]
 pub fn saturating_combinations(n: u32, r: u32) -> u128 {
@@ -566,7 +566,6 @@ fn neighbors_of_cord(
     // Each radius increases number of cells in each dimension by 2 starting with 1 cell at radius = 0
     for j in 0..2 * radius + 1 {
         for i in 0..2 * radius + 1 {
-            // TODO check that usize doesn't overflow here for negative cords.
             let x: i64 = cord.0 as i64 - radius as i64 + i as i64;
             let y: i64 = cord.1 as i64 - radius as i64 + j as i64;
             // Don't make neighbors with negative cords.
@@ -706,7 +705,6 @@ pub struct Game {
     board_cell_width: u32,
     board_cell_height: u32,
     top_left: Point,
-    // bottom_right: Point,
     individual_cell_width: u32,
     individual_cell_height: u32,
     board_screenshot: RgbImage,
