@@ -1,5 +1,7 @@
 use minesweeper_solver_in_rust::{CellCord, Game};
 
+const NUMBER_OF_MINES: u32 = 99;
+
 fn main() {
     let mut game = Game::new(
         [
@@ -15,7 +17,7 @@ fn main() {
             "cell_images/cell.png",
             "cell_images/complete.png",
         ],
-        99,
+        NUMBER_OF_MINES,
         0,
     );
 
