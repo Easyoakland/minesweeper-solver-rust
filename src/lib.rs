@@ -8,7 +8,7 @@ use std::{
     error::Error,
     fmt,
     fs::OpenOptions,
-    hash::{BuildHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
     io::prelude::*,
     ops::{Add, Sub},
 };
@@ -316,94 +316,6 @@ impl CellKind {
     }
 }
 
-/// Outputs an unordered vector. The vector is the result of merging all sets that share any item in common.
-/// This transitively applies until all elements that are somehow linked through these sets are in a single set.
-/// The resulting vector contains pairwise disjoint sets.
-/// # Examples
-/// ```
-/// use minesweeper_solver_in_rust::merge_overlapping_sets;
-/// use std::collections::HashSet;
-///
-/// assert_eq!(
-/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3]), HashSet::from([1,2]), HashSet::from([4])])),
-/// vec![HashSet::from([1, 2, 3]), HashSet::from([4])]);
-///
-/// assert_eq!(
-/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3,4]), HashSet::from([1,2]), HashSet::from([4])])),
-/// vec![HashSet::from([1, 3, 2, 4])]);
-///
-/// assert_eq!(
-/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3,4]), HashSet::from([1,2]), HashSet::from([4]), HashSet::from([5,6]), HashSet::from([7])])),
-/// vec![HashSet::from([3, 1, 4, 2]), HashSet::from([5, 6]), HashSet::from([7])]);
-///
-/// assert_eq!(
-/// merge_overlapping_sets(Vec::from([HashSet::from([1,2,3,4]), HashSet::from([1,2]), HashSet::from([4]), HashSet::from([5,6]), HashSet::from([4, 7])])),
-/// vec![HashSet::from([3, 1, 4, 2, 7]), HashSet::from([5, 6])]);
-///
-/// assert_eq!(
-/// merge_overlapping_sets(Vec::from([HashSet::from(['a','b','c','d']), HashSet::from(['a','g']), HashSet::from(['e']), HashSet::from(['f','h']), HashSet::from(['k', 'a']), HashSet::from(['k', 'z'])])),
-/// vec![HashSet::from(['z', 'd', 'b', 'c', 'a', 'k', 'g']), HashSet::from(['e']), HashSet::from(['h', 'f'])]);
-/// ```
-#[must_use]
-pub fn merge_overlapping_sets<T, S: BuildHasher + Default>(
-    sets: Vec<HashSet<T, S>>,
-) -> Vec<HashSet<T, S>>
-where
-    T: Eq + Hash + Clone,
-{
-    let mut merged_sets: Vec<HashSet<T, S>> = Vec::new();
-    for s in sets {
-        let mut is_overlapping = false;
-
-        for t in &mut merged_sets {
-            let intersection: HashSet<T, S> = s.intersection(t).cloned().collect();
-            if !intersection.is_empty() {
-                let union: HashSet<T, S> = s.union(t).cloned().collect();
-                *t = union;
-                is_overlapping = true;
-                break;
-            }
-        }
-
-        if !is_overlapping {
-            merged_sets.push(s);
-        }
-    }
-    let mut result: Vec<HashSet<T, S>> = Vec::new();
-    for set in merged_sets {
-        let mut flag = true;
-        for s in &result {
-            if s.is_subset(&set) {
-                flag = false;
-                break;
-            }
-        }
-        if flag {
-            result.push(set);
-        }
-    }
-    result
-}
-
-/// Simple factorial calculation for positive integers. If value would saturate instead returns max for datatype.
-/// # Examples
-/// ```
-/// use minesweeper_solver_in_rust::saturating_factorial;
-/// assert_eq!(saturating_factorial(3), 6);
-/// assert_eq!(saturating_factorial(10000), u128::MAX);
-/// assert_eq!(saturating_factorial(35), u128::MAX);
-/// ```
-#[must_use]
-pub fn saturating_factorial(n: u32) -> u64 {
-    dbg!(&n);
-    // 12! is almost exactly small enough to fit in u64. 13! overflows.
-    if n > 12 {
-        u64::MAX
-    } else {
-        (2u64..(n as u64 + 1u64)).product::<u64>().into()
-    }
-}
-
 /// Gets all factors of input.
 /// ```
 /// use minesweeper_solver_in_rust::prime_factorize;
@@ -506,7 +418,7 @@ pub fn saturating_combinations(n: u32, r: u32) -> u128 {
         .into()
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CellGroup {
     offsets: HashSet<usize>,
     mine_num: u32,
@@ -521,6 +433,34 @@ impl Hash for CellGroup {
             offset.hash(state);
         }
     }
+}
+
+/// First item in inner vec is the item the rest of the items in the inner vec intersect to first order.
+fn merge_overlapping_groups_first_order(input: &[CellGroup]) -> Vec<Vec<&CellGroup>> {
+    let mut out = Vec::new();
+
+    // Loop over input elements.
+    for (k, e) in input.iter().enumerate() {
+        let mut temp = Vec::new();
+
+        temp.push(k);
+        // Loop over second element compared to first.
+        for (i, e2) in input.iter().enumerate() {
+            // Don't re-include the same item.
+            // If not disjoint include it in the local group.
+            if i != k && !e.offsets.is_disjoint(&e2.offsets) {
+                temp.push(i);
+            }
+        }
+
+        // Each index that shared first_order_overlap
+        let mut local_group = Vec::new();
+        for j in temp {
+            local_group.push(&input[j]);
+        }
+        out.push(local_group);
+    }
+    out
 }
 
 /// Works like `merge_overlapping_sets` but for a `Vec` of `CellGroup`.
@@ -1404,6 +1344,7 @@ impl Game {
         Ok(())
     }
 
+    #[must_use]
     fn enumerate_all_possible_arrangements(
         sub_group_mine_num_lower_limit: usize,
         sub_group_mine_num_upper_limit: usize,
@@ -1594,6 +1535,177 @@ impl Game {
         }
     }
 
+    /// First order intersection solve. Identifies 100% and 0% mine locations by iterating all possibilities of single cells compared to it's neighbors.
+    fn local_solve(&mut self, simulate: bool) -> u32 {
+        let mut did_something = 0;
+
+        // Generate first order intersections for each `CellGroup`
+        let local_groups = merge_overlapping_groups_first_order(&self.cell_groups);
+
+        let mut reveal_pos = vec![];
+        let mut flag_pos = vec![];
+
+        // For each of these groups
+        for group in local_groups {
+            let group_total_offsets_no_overlap = {
+                let mut temp = HashSet::new();
+                group.iter().for_each(|&x| {
+                    x.offsets.iter().for_each(|&y| {
+                        temp.insert(y);
+                    });
+                });
+                temp
+            };
+
+            // Enumerate all possibilities for the group finding how often mines appear in each location.
+            let (number_of_valid_combinations, occurrences_of_mine_per_offset) = {
+                let mut occurrences_of_mine_per_offset: HashMap<_, _> =
+                    group_total_offsets_no_overlap
+                        .iter()
+                        .map(|&offset| (offset, 0))
+                        .collect();
+                let mut number_of_valid_combinations = 0;
+
+                // For each possible arrangement of mines for the particular cell that is being examined.
+                'combinations: for combination in group[0]
+                    .offsets
+                    .iter()
+                    .combinations(group[0].mine_num.try_into().unwrap())
+                {
+                    // Count up how many times a mine occurs in each offset position.
+                    for cell_group in group.iter() {
+                        // Stores how many mines are in `cell_group` for this particular arrangement of mines.
+                        let mut individual_cell_group_mine_num_for_specific_combination = 0;
+                        // For every offset in `cell_group`.
+                        for offset in &cell_group.offsets {
+                            // If the offset is a mine.
+                            if combination.contains(&offset) {
+                                // Increment how many mines are in `cell_group` for this arrangement.
+                                individual_cell_group_mine_num_for_specific_combination += 1;
+                            }
+                        }
+                        // Verifies that the number of mines left to find for the `CellGroup`
+                        // is not more than the amount of spots it has left to fill.
+                        if cell_group
+                            .mine_num
+                            .saturating_sub(individual_cell_group_mine_num_for_specific_combination)
+                            > cell_group
+                                .offsets
+                                .difference(&group[0].offsets)
+                                .count()
+                                .try_into()
+                                .unwrap()
+                        {
+                            continue 'combinations;
+                        }
+                        // Verifies that the number of mines placed in the `CellGroup` is not greater the `CellGroup` mine_num
+                        else if individual_cell_group_mine_num_for_specific_combination
+                            > cell_group.mine_num
+                        {
+                            continue 'combinations;
+                        }
+                    }
+
+                    // Since the amount of mines is correct.
+                    // For every offset in this valid combination
+                    // increment the amount of mines at each offset.
+                    for offset in combination {
+                        *(occurrences_of_mine_per_offset.get_mut(offset).unwrap()) += 1;
+                    }
+
+                    // Since the arrangement is valid increment the number of valid arrangements.
+                    number_of_valid_combinations += 1;
+                }
+
+                (number_of_valid_combinations, occurrences_of_mine_per_offset)
+            };
+
+            // Check each position of the particular cell being examined.
+            for &offset in &group[0].offsets {
+                let occurrence_cnt = occurrences_of_mine_per_offset[&offset];
+                // If no mine occurred in a particular position flag it.
+                if occurrence_cnt == 0 {
+                    reveal_pos.push(offset);
+                    did_something += 1;
+                }
+                // Else if mine always occurred in particular position reveal it.
+                else if occurrence_cnt == number_of_valid_combinations {
+                    flag_pos.push(offset);
+                    did_something += 1;
+                }
+            }
+        }
+
+        // Reveal and execute here because immutable on self would have prevented it in loop.
+        {
+            for offset in reveal_pos {
+                let cord = self.offset_to_cell_cord(offset);
+                if !simulate {
+                    self.reveal(cord);
+                } else if simulate {
+                    self.reveal_simulation(cord);
+                }
+            }
+            for offset in flag_pos {
+                let cord = self.offset_to_cell_cord(offset);
+                if !simulate {
+                    self.flag(cord);
+                } else if simulate {
+                    self.flag_simulation(cord);
+                }
+            }
+        }
+
+        did_something
+    }
+
+    fn calc_group_mine_limits(sub_group: &HashSet<&CellGroup>) -> (usize, usize, HashSet<usize>) {
+        let mut sub_group_total_offsets: Vec<usize> = Vec::new();
+        let mut sub_group_mine_num_upper_limit_for_completely_unshared_mines = 0;
+
+        // Put all offsets of corresponding subgroup into a Vec. Also count how many mines exist if there are no duplicates.
+        for cell_group in sub_group {
+            sub_group_total_offsets.extend(cell_group.offsets.clone());
+
+            // The upper limit on the number of mines in a subgroup is if all the CellGroup share no mines.
+            // This number is the sum total of simply adding each mine_num.
+            sub_group_mine_num_upper_limit_for_completely_unshared_mines += cell_group.mine_num;
+        }
+
+        // Save how many offsets with overlaps there are.
+        // Do this by saving how many offsets exist before (here) and after (later) merging.
+        let number_of_subgroup_total_offsets_before_overlaps_removed =
+            sub_group_total_offsets.len();
+
+        // Remove overlaps here by converting to a set which by defintion contains no duplicates.
+        let sub_group_total_offsets_after_overlaps_removed: HashSet<usize> =
+            sub_group_total_offsets.into_iter().collect();
+        let number_of_sub_group_total_offsets_after_overlaps_removed =
+            sub_group_total_offsets_after_overlaps_removed.len();
+
+        // An upper limit of mines is the number of positions in the sub_group. It can't have more mines than it has positions.
+        // Another is if every intersection does not have a mine.
+        // Set upperlimit to the smaller upperlimit.
+        let sub_group_mine_num_upper_limit =
+            number_of_sub_group_total_offsets_after_overlaps_removed
+                .min(sub_group_mine_num_upper_limit_for_completely_unshared_mines as usize);
+
+        // The lower limit on mines is if every intersection had a mine.
+        // It is the same as upper limit (no mines at intersections or number of places for a mine to be) minus the number of intersections.
+        // This is because each intersection is another place where the mine could have been double counted in the upper limit.
+        // Saturating subtraction because lower_limit can't be negative but the subtraction might if there are more overlaps than maximum upper limit.
+        let sub_group_mine_num_lower_limit = sub_group_mine_num_upper_limit.saturating_sub(
+            number_of_subgroup_total_offsets_before_overlaps_removed
+                - number_of_sub_group_total_offsets_after_overlaps_removed,
+        );
+
+        (
+            sub_group_mine_num_lower_limit,
+            sub_group_mine_num_upper_limit,
+            sub_group_total_offsets_after_overlaps_removed,
+        )
+    }
+
     /// Make best guess from all possibilities.
     /// # Panics
     /// If it can't find a valid move then a divide by zero will occur. This should panic.
@@ -1612,44 +1724,11 @@ impl Game {
 
         // For each independent sub group of cell_groups.
         for sub_group in sub_groups {
-            let mut sub_group_total_offsets: Vec<usize> = Vec::new();
-            let mut sub_group_mine_num_upper_limit_for_completely_unshared_mines = 0;
-
-            // Put all offsets of corresponding subgroup into a Vec. Also count how many mines exist if there are no duplicates.
-            for cell_group in &sub_group {
-                sub_group_total_offsets.extend(cell_group.offsets.clone());
-
-                // The upper limit on the number of mines in a subgroup is if all the CellGroup share no mines.
-                // This number is the sum total of simply adding each mine_num.
-                sub_group_mine_num_upper_limit_for_completely_unshared_mines += cell_group.mine_num;
-            }
-
-            // Save how many offsets with overlaps there are.
-            // Do this by saving how many offsets exist before (here) and after (later) merging.
-            let number_of_subgroup_total_offsets_before_overlaps_removed =
-                sub_group_total_offsets.len();
-
-            // Remove overlaps here by converting to a set which by defintion contains no duplicates.
-            let sub_group_total_offsets_after_overlaps_removed: HashSet<usize> =
-                sub_group_total_offsets.into_iter().collect();
-            let number_of_sub_group_total_offsets_after_overlaps_removed =
-                sub_group_total_offsets_after_overlaps_removed.len();
-
-            // An upper limit of mines is the number of positions in the sub_group. It can't have more mines than it has positions.
-            // Another is if every intersection does not have a mine.
-            // Set upperlimit to the smaller upperlimit.
-            let sub_group_mine_num_upper_limit =
-                number_of_sub_group_total_offsets_after_overlaps_removed
-                    .min(sub_group_mine_num_upper_limit_for_completely_unshared_mines as usize);
-
-            // The lower limit on mines is if every intersection had a mine.
-            // It is the same as upper limit (no mines at intersections or number of places for a mine to be) minus the number of intersections.
-            // This is because each intersection is another place where the mine could have been double counted in the upper limit.
-            // Saturating subtraction because lower_limit can't be negative but the subtraction might if there are more overlaps than maximum upper limit.
-            let sub_group_mine_num_lower_limit = sub_group_mine_num_upper_limit.saturating_sub(
-                number_of_subgroup_total_offsets_before_overlaps_removed
-                    - number_of_sub_group_total_offsets_after_overlaps_removed,
-            );
+            let (
+                sub_group_mine_num_lower_limit,
+                sub_group_mine_num_upper_limit,
+                sub_group_total_offsets_after_overlaps_removed,
+            ) = Game::calc_group_mine_limits(&sub_group);
 
             // Check that the amount of combinations will not exceed the global variable for the maximum combinations.
             // If it does this will take too long.
@@ -1754,35 +1833,11 @@ impl Game {
                 self.deterministic_solve(simulate)?;
             }
 
-            // DEBUG
-            if LOGGING && simulate {
-                // If a cell group contains more bombs than the actual amount of bombs in the simulation.
-                let mut actual_cell_groups = Vec::new();
-                let mut actual_mine_num = 0;
-                let problem_cell_groups: Vec<&CellGroup> = self
-                    .cell_groups
-                    .iter()
-                    .filter(|cell_group| {
-                        actual_mine_num = cell_group
-                            .offsets
-                            .iter()
-                            .filter(|offset| self.simulation.as_ref().unwrap().state[**offset])
-                            .count();
-                        let filter_result = actual_mine_num != cell_group.mine_num as usize;
-                        if filter_result {
-                            actual_cell_groups.push(CellGroup {
-                                offsets: cell_group.offsets.clone(),
-                                mine_num: actual_mine_num as u32,
-                            });
-                        }
-                        filter_result
-                    })
-                    .collect();
-                if !problem_cell_groups.is_empty() {
-                    self.save_state_info("test/FinalGameStateBefore.csv", true);
-                    println!("Cell Group created with more bombs than than actually exist. Problematic groups are {problem_cell_groups:#?}.\n Cell Groups should be:\n{actual_cell_groups:#?}");
-                }
-            }
+            // Attempt local solves
+            if self.local_solve(simulate) > 0 {
+                // If local solves occurred then don't go to guess.
+                continue;
+            };
 
             if !self.cell_groups.is_empty() {
                 if LOGGING {
@@ -2124,6 +2179,48 @@ mod tests {
         assert!(&output[0].contains(&cell1));
         assert!(&output[0].contains(&cell2));
         assert!(&output[1].contains(&cell3));
+    }
+
+    #[test]
+    fn merge_overlapping_first_order_test() {
+        let groups = vec![
+            CellGroup {
+                offsets: HashSet::from([1, 2]),
+                ..CellGroup::default()
+            }, // 0
+            CellGroup {
+                offsets: HashSet::from([5, 4]),
+                ..CellGroup::default()
+            }, // 1
+            CellGroup {
+                offsets: HashSet::from([6, 7]),
+                ..CellGroup::default()
+            }, // 2
+            CellGroup {
+                offsets: HashSet::from([7, 2]),
+                ..CellGroup::default()
+            }, // 3
+            CellGroup {
+                offsets: HashSet::from([5, 6]),
+                ..CellGroup::default()
+            }, // 4
+            CellGroup {
+                offsets: HashSet::from([200, 20]),
+                ..CellGroup::default()
+            }, // 5
+        ];
+        let output = merge_overlapping_groups_first_order(&groups);
+        assert_eq!(
+            output,
+            vec![
+                vec![&groups[0], &groups[3]],
+                vec![&groups[1], &groups[4]],
+                vec![&groups[2], &groups[3], &groups[4]],
+                vec![&groups[3], &groups[0], &groups[2]],
+                vec![&groups[4], &groups[1], &groups[2]],
+                vec![&groups[5]],
+            ]
+        )
     }
 
     #[test]
