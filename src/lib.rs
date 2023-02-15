@@ -14,7 +14,7 @@ use std::{
 };
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
-const MAX_COMBINATIONS: u128 = 2_000_000;
+const MAX_COMBINATIONS: u128 = 200_000;
 const LOGGING: bool = false;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
@@ -463,36 +463,61 @@ fn merge_overlapping_groups_first_order(input: &[CellGroup]) -> Vec<Vec<&CellGro
     out
 }
 
-/// Works like `merge_overlapping_sets` but for a `Vec` of `CellGroup`.
-fn merge_overlapping_groups<T>(groups: &Vec<CellGroup>) -> Vec<HashSet<&CellGroup>>
-where
-    T: Eq + Hash + Clone,
-    HashSet<T>: FromIterator<usize>,
-{
-    let mut merged_groups: Vec<HashSet<&CellGroup>> = Vec::new();
-    for group in groups {
-        let mut is_overlapping = false;
+/// For each Subgroup if input element intersects then merge element into `Subgroup` and mark the `Subgroup`.
+/// Then remove all marked Subgroup and combine before adding back.
+/// If doesn't intersect make new Subgroup.
+fn merge_overlapping_groups<'a>(input: &'a [CellGroup]) -> Vec<HashSet<&'a CellGroup>> {
+    #[derive(Debug, Default)]
+    struct Subgroup {
+        offsets: HashSet<usize>,
+        sets: HashSet<usize>,
+    }
 
-        for t in &mut merged_groups {
-            let intersection: HashSet<T> = group
-                .offsets
-                .intersection(&t.iter().next().unwrap().offsets)
-                .copied()
-                .collect();
-            if !intersection.is_empty() {
-                t.insert(group);
-                is_overlapping = true;
-                break;
+    let mut state: Vec<Subgroup> = Vec::new();
+    for (i, e) in input.into_iter().enumerate() {
+        let mut marks = vec![];
+        let mut temp = vec![Subgroup {
+            offsets: e.offsets.clone(),
+            sets: {
+                let mut set = HashSet::new();
+                set.insert(i);
+                set
+            },
+        }];
+
+        // Merge input where not disjoint.
+        for (k, t) in state.iter_mut().enumerate() {
+            if !e.offsets.is_disjoint(&t.offsets) {
+                marks.push(k);
+                t.offsets.extend(e.offsets.clone());
             }
         }
 
-        if !is_overlapping {
-            let mut set = HashSet::new();
-            set.insert(group);
-            merged_groups.push(set);
+        // Add all marked Subgroup to temp for future merge
+        // Iterate in reverse so removal doesn't affect indexes.
+        for &j in marks.iter().rev() {
+            // Remove all marked and add into temp.
+            temp.push(state.swap_remove(j));
         }
+
+        // Merge items in temp into one Subgroup and add to state.
+        let mut merged_group = Subgroup::default();
+        for group in temp {
+            merged_group.offsets.extend(group.offsets);
+            merged_group.sets.extend(group.sets);
+        }
+        state.push(merged_group);
     }
-    merged_groups
+    let mut out = vec![];
+    for subgroup in state {
+        let mut set = HashSet::new();
+        for set_idx in subgroup.sets {
+            set.insert(&input[set_idx]);
+            // set.insert(set_idx); // inserts indexes in input instead of values
+        }
+        out.push(set);
+    }
+    out
 }
 
 fn neighbors_of_cord(
@@ -655,7 +680,6 @@ pub struct Game {
     action_stack: Vec<CellCord>,
     mine_num: u32,
     endgame: bool,
-    /* board_screenshot_vec: Vec<u8>, */
 }
 
 impl Game {
@@ -1362,7 +1386,7 @@ impl Game {
                 .collect();
         let mut number_of_valid_combinations = 0;
         for sub_group_mine_num in
-            0.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
+            1.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
         {
             // Count up how many times a mine occurs in each offset position.
             'combinations: for combination in sub_group_total_offsets_after_overlaps_removed
@@ -1659,7 +1683,11 @@ impl Game {
         did_something
     }
 
-    fn calc_group_mine_limits(sub_group: &HashSet<&CellGroup>) -> (usize, usize, HashSet<usize>) {
+    fn calc_group_mine_limits(
+        &self,
+        sub_group: &HashSet<&CellGroup>,
+        sub_group_num: usize,
+    ) -> (usize, usize, HashSet<usize>) {
         let mut sub_group_total_offsets: Vec<usize> = Vec::new();
         let mut sub_group_mine_num_upper_limit_for_completely_unshared_mines = 0;
 
@@ -1699,6 +1727,11 @@ impl Game {
                 - number_of_sub_group_total_offsets_after_overlaps_removed,
         );
 
+        // Actual upper limit can also be limited by the fact that the amount of mines in a subgroup must be at least 1.
+        // The +1 below is because the number of sub groups - 1 is the number of other groups that have a bomb not in this sub_group.
+        let sub_group_mine_num_upper_limit = sub_group_mine_num_upper_limit
+            .min(<u32 as TryInto<usize>>::try_into(self.mine_num).unwrap() - sub_group_num + 1);
+
         (
             sub_group_mine_num_lower_limit,
             sub_group_mine_num_upper_limit,
@@ -1721,6 +1754,7 @@ impl Game {
         // Find the sub groups of the grid of interconnected cell_groups that are not related or interconnected.
         // Basically partitions board so parts that don't affect each other are handled separately to make the magnitudes of the combinations later on more managable.
         let sub_groups = merge_overlapping_groups(&self.cell_groups);
+        let sub_group_num = sub_groups.len();
 
         // For each independent sub group of cell_groups.
         for sub_group in sub_groups {
@@ -1728,14 +1762,14 @@ impl Game {
                 sub_group_mine_num_lower_limit,
                 sub_group_mine_num_upper_limit,
                 sub_group_total_offsets_after_overlaps_removed,
-            ) = Game::calc_group_mine_limits(&sub_group);
+            ) = self.calc_group_mine_limits(&sub_group, sub_group_num);
 
             // Check that the amount of combinations will not exceed the global variable for the maximum combinations.
             // If it does this will take too long.
             let mut combination_total = 0;
             // From the least to the most possible number of mines.
             for sub_group_mine_num in
-                0.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
+                1.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
             {
                 // Calculate the amount of combinations.
                 let combination_amount = saturating_combinations(
@@ -2179,6 +2213,67 @@ mod tests {
         assert!(&output[0].contains(&cell1));
         assert!(&output[0].contains(&cell2));
         assert!(&output[1].contains(&cell3));
+
+        let groups = vec![
+            CellGroup {
+                offsets: HashSet::from([248, 249]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([278, 248]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([279, 249]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([279, 278]),
+                mine_num: 1,
+            },
+        ];
+        let output = merge_overlapping_groups(&groups);
+        assert_eq!(output, vec![groups.iter().collect::<HashSet<_>>()]);
+
+        let groups = vec![
+            CellGroup {
+                offsets: HashSet::from([1, 2]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([5, 4]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([6, 7]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([7, 2]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([5, 6]),
+                mine_num: 1,
+            },
+            CellGroup {
+                offsets: HashSet::from([20, 200]),
+                mine_num: 1,
+            },
+        ];
+        let output = merge_overlapping_groups(&groups);
+        let mut set_extra = HashSet::new();
+        set_extra.insert(&groups[5]);
+        assert_eq!(
+            output,
+            vec![
+                groups
+                    .iter()
+                    .filter(|x| x.offsets != HashSet::from([20, 200]))
+                    .collect::<HashSet<_>>(),
+                set_extra
+            ]
+        );
     }
 
     #[test]
