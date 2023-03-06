@@ -1,3 +1,4 @@
+use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use captrs::{Bgr8, Capturer};
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
@@ -596,7 +597,7 @@ impl Cell {
 
 #[derive(Debug)]
 pub struct Simulation {
-    state: Vec<bool>,
+    state: BitVec,
     board_cell_width: u32,
     board_cell_height: u32,
 }
@@ -604,7 +605,7 @@ pub struct Simulation {
 impl Simulation {
     #[must_use]
     pub fn new(width: u32, height: u32, mine_num: u32, initial_guess: CellCord) -> Simulation {
-        let mut state = Vec::with_capacity(width as usize * height as usize);
+        let mut state = BitVec::with_capacity(width as usize * height as usize);
         let neighbors = neighbors_of_cord(initial_guess, 1, width, height);
         let initial_guess_offset = cell_cord_to_offset(width, initial_guess);
 
@@ -1157,7 +1158,7 @@ impl Game {
                 .state
                 .iter()
                 .enumerate()
-                .filter(|(i, &x)| x && self.state[*i] == CellKind::Unexplored)
+                .filter(|(i, x)| **x && self.state[*i] == CellKind::Unexplored)
                 .count();
             if sim_mine_num != self.mine_num.try_into().unwrap() {
                 {
@@ -2347,10 +2348,8 @@ mod tests {
     fn simulate_infinite_flag_error() {
         let mut game = Game::new_for_simulation(5, 5, 7, CellCord(0, 0));
         game.simulation = Some(Simulation::new(5, 5, 7, CellCord(0, 0)));
-        game.simulation.as_mut().unwrap().state = vec![
-            false, false, true, true, false, false, false, false, true, false, false, false, false,
-            false, false, false, true, true, false, false, false, false, true, true, false,
-        ];
+        game.simulation.as_mut().unwrap().state =
+            bitvec![0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0,];
         match game.solve(CellCord(0, 0), true) {
             Ok(_) => (),
             Err(GameError::RevealedMine(_)) => (),
@@ -2456,46 +2455,24 @@ mod tests {
     fn more_mines_than_cells_error() {
         let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
         game.simulation = Some(Simulation::new(30, 16, 99, CellCord(14, 7)));
-        game.simulation.as_mut().unwrap().state = vec![
-            true, false, false, false, false, true, false, false, false, false, false, false,
-            false, false, false, true, false, false, false, true, false, true, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false, true, false, false, false, false, true, true, false, true,
-            true, false, false, false, false, false, true, false, false, false, false, false,
-            false, false, false, true, false, false, false, false, true, false, false, false,
-            false, false, false, false, false, false, false, false, false, true, false, false,
-            false, true, false, false, true, false, false, true, false, false, true, false, false,
-            false, true, false, false, false, false, false, false, false, true, false, false,
-            false, false, true, false, false, false, false, true, false, true, false, false, true,
-            false, false, false, false, false, false, true, true, true, false, false, false, true,
-            true, true, true, false, false, false, false, false, false, false, true, false, false,
-            false, false, false, false, false, true, true, true, true, false, true, false, false,
-            true, false, false, false, false, false, false, false, true, false, false, false,
-            false, false, false, false, true, false, true, true, false, true, false, false, false,
-            true, false, false, false, false, false, false, false, true, false, false, false,
-            false, false, false, true, false, false, false, true, false, false, false, false,
-            false, false, false, false, true, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, true, false, false,
-            true, true, false, true, false, false, true, true, false, true, true, false, false,
-            false, false, false, true, false, false, false, false, false, false, false, false,
-            false, false, true, true, true, true, false, false, false, true, true, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, true, false, false, false, false,
-            false, true, false, true, false, false, false, true, false, false, false, false, false,
-            true, false, false, false, false, false, false, false, true, false, false, false,
-            false, true, false, true, false, true, false, true, true, false, false, false, true,
-            false, false, true, false, true, false, false, true, true, true, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, true, false, true, false, true, false,
-            false, false, false, false, true, false, true, true, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, true, false, false,
-            true, true, false, false, true, false, false, false, true, true, false, false, false,
-            false, false, true, false, false, false, false, false, false, false, false, true,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, true, true, true, false,
-            false, false, false, false, false, false, false, false, false, false, false, true,
-            false, false, false, false, false, false, false, true, false, false, false, false,
-            false, false, false, false, false, false, false,
+        game.simulation.as_mut().unwrap().state = bitvec![
+            1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+            0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0,
+            0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0,
+            0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+            0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
         match game.solve(CellCord(14, 7), true) {
             Ok(_) => (),
@@ -2511,46 +2488,24 @@ mod tests {
     fn no_valid_combinations_error() {
         let mut game = Game::new_for_simulation(30, 16, 99, CellCord(14, 7));
         game.simulation = Some(Simulation::new(30, 16, 99, CellCord(14, 7)));
-        game.simulation.as_mut().unwrap().state = vec![
-            false, false, false, true, false, false, false, false, true, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, true, false, false, false, false, false, false, true, false, false, false,
-            false, false, false, false, true, true, false, false, false, false, false, false,
-            false, true, false, false, false, false, false, false, true, true, false, false, false,
-            false, true, true, false, true, true, true, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, true, false, false, false, false, true, true, false, true, true, false, false,
-            false, true, false, false, true, false, false, false, false, true, false, true, true,
-            false, false, false, false, false, false, false, false, false, true, true, false,
-            false, true, false, true, true, true, false, false, true, false, false, true, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, true, false,
-            false, true, false, true, false, false, false, true, true, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            true, false, false, false, false, false, false, false, false, false, true, false,
-            false, false, false, false, false, false, false, false, true, true, false, false,
-            false, false, false, false, false, true, false, false, true, false, false, true, false,
-            false, false, false, false, false, false, true, true, false, false, false, true, false,
-            false, false, false, true, false, false, false, false, true, true, false, false, false,
-            false, false, false, true, true, true, false, false, false, false, false, false, false,
-            false, false, true, true, false, false, false, false, true, false, false, false, false,
-            false, false, true, true, false, false, false, false, false, false, false, true, false,
-            false, true, true, false, false, true, false, false, false, false, true, false, false,
-            false, false, false, false, false, false, false, true, false, false, false, false,
-            true, false, true, false, false, true, false, false, false, false, false, false, false,
-            true, false, false, false, true, true, false, false, false, false, false, false, false,
-            false, true, true, false, false, false, false, false, true, false, false, false, true,
-            true, false, false, false, false, false, true, true, false, true, false, false, false,
-            true, false, false, true, true, true, true, true, true, false, false, false, false,
-            false, false, false, false, false, false, true, false, true, false, false, false,
-            false, false, false, true, false, false, true, true, false, false, false, false, true,
-            false, false, false, true, false, true, false, false, false, true, true, false, false,
-            false, false, false, true, false, false, true, false, false, false, false, false,
-            false, false, false, true, false, false, false, false, false, false, false, false,
-            false, false, false, false, false, false, false, false, false, true, false, false,
-            false, false, false, false, false, false, false, false, false, false, false, false,
-            false, false, false, false,
+        game.simulation.as_mut().unwrap().state = bitvec![
+            0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1,
+            0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+            1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0,
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0,
+            0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0,
+            1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1,
+            0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1,
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
         match game.solve(CellCord(14, 7), true) {
             Ok(_) => (),
