@@ -1922,7 +1922,7 @@ impl Game {
         }
 
         // If the game still contains unexplored cells it was not fully solved.
-        if self.state.iter().contains(&CellKind::Unexplored) {
+        if self.state.contains(&CellKind::Unexplored) {
             // This situation can occur if a wall of mines separates the two section of the board because the frontier won't be able to pass the wall.
             // So start solution at a random unexplored cell which most likely be on the other side of the mine wall.
             self.solve(
