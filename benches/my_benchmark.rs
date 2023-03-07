@@ -1,6 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use image::io;
-use minesweeper_solver_in_rust::{locate_all, read_image, setup_capturer, Game};
+use minesweeper_solver_in_rust::{
+    locate_all, read_image, setup_capturer, CellCord, Game, GameError,
+};
 use rand::{seq::SliceRandom, thread_rng};
 use std::collections::HashSet;
 
@@ -115,10 +117,33 @@ fn sort_binary_or_linear_or_hashmap(c: &mut Criterion) {
     });
 }
 
+fn simulate_win_rate_one_cell_benchmark(c: &mut Criterion) {
+    fn simulate_win_rate_one_cell_one_time() {
+        use std::sync::Mutex;
+        let win_cnt = Mutex::new(0);
+        let lose_cnt = Mutex::new(0);
+        let unfinished_cnt = Mutex::new(0);
+        let initial_guess = CellCord(2, 3);
+        let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
+        match game.solve(initial_guess, true) {
+            Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
+            Ok(_) => *win_cnt.lock().unwrap() += 1,
+            Err(GameError::Unfinished) => {
+                *unfinished_cnt.lock().unwrap() += 1;
+            }
+            Err(e) => panic!("{e}"),
+        };
+    }
+    c.bench_function("simulate one run", |b| {
+        b.iter(|| simulate_win_rate_one_cell_one_time());
+    });
+}
+
 criterion_group!(
     benches,
     test_board_sub_image_search_benchmark,
     test_identify_cell_benchmark,
-    sort_binary_or_linear_or_hashmap
+    sort_binary_or_linear_or_hashmap,
+    simulate_win_rate_one_cell_benchmark
 );
 criterion_main!(benches);
