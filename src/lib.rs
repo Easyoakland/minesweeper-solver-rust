@@ -1,4 +1,4 @@
-#[allow(unused_imports)] // lsb0 is indicated as unused but it is not unused.
+#[allow(unused_imports)] // Lsb0 is indicated as unused but it is not unused.
 use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use captrs::{Bgr8, Capturer};
 use enigo::{Enigo, MouseControllable};
@@ -421,7 +421,7 @@ pub fn saturating_combinations(n: u32, r: u32) -> u128 {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CellGroup {
+struct CellGroup {
     offsets: HashSet<usize>,
     mine_num: u32,
 }
@@ -1371,7 +1371,7 @@ impl Game {
     }
 
     #[must_use]
-    pub fn enumerate_all_possible_arrangements(
+    fn enumerate_all_possible_arrangements(
         sub_group_mine_num_lower_limit: usize,
         sub_group_mine_num_upper_limit: usize,
         sub_group_total_offsets_after_overlaps_removed: &HashSet<usize>,
