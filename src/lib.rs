@@ -1,3 +1,4 @@
+#[allow(unused_imports)] // lsb0 is indicated as unused but it is not unused.
 use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use captrs::{Bgr8, Capturer};
 use enigo::{Enigo, MouseControllable};
@@ -420,7 +421,7 @@ pub fn saturating_combinations(n: u32, r: u32) -> u128 {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct CellGroup {
+pub struct CellGroup {
     offsets: HashSet<usize>,
     mine_num: u32,
 }
@@ -1370,7 +1371,7 @@ impl Game {
     }
 
     #[must_use]
-    fn enumerate_all_possible_arrangements(
+    pub fn enumerate_all_possible_arrangements(
         sub_group_mine_num_lower_limit: usize,
         sub_group_mine_num_upper_limit: usize,
         sub_group_total_offsets_after_overlaps_removed: &HashSet<usize>,
@@ -1385,31 +1386,60 @@ impl Game {
                 .iter()
                 .map(|offset| (*offset, 0))
                 .collect();
+        let offset_to_bit_pos: HashMap<_, _> = sub_group_total_offsets_after_overlaps_removed
+            .iter()
+            .enumerate()
+            .map(|(i, offset)| (*offset, i))
+            .collect();
+        let bit_pos_to_offset: HashMap<_, _> = sub_group_total_offsets_after_overlaps_removed
+            .iter()
+            .enumerate()
+            .map(|(i, offset)| (i, *offset))
+            .collect();
+        let cell_group_bitmasks = {
+            let mut out = HashSet::new();
+            for cell_group in sub_group {
+                let mut temp = fixedbitset::FixedBitSet::with_capacity_and_blocks(
+                    sub_group_total_offsets_after_overlaps_removed.len(),
+                    None,
+                );
+                for offset in &cell_group.offsets {
+                    temp.set(offset_to_bit_pos[offset], true);
+                }
+                out.insert((*cell_group, temp));
+            }
+            out
+        };
         let mut number_of_valid_combinations = 0;
+        let mut combination_bitmask = fixedbitset::FixedBitSet::with_capacity_and_blocks(
+            sub_group_total_offsets_after_overlaps_removed.len(),
+            None,
+        );
         for sub_group_mine_num in
             1.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
         {
             // Count up how many times a mine occurs in each offset position.
-            'combinations: for combination in sub_group_total_offsets_after_overlaps_removed
-                .iter()
+            'combinations: for combination in (0..(sub_group_total_offsets_after_overlaps_removed
+                .len()))
                 .combinations(sub_group_mine_num)
             {
+                // Initialize the mask and set the positions that are selected this combination as ones.
+                combination_bitmask.clear();
+                for bit_pos in &combination {
+                    combination_bitmask.set(*bit_pos, true);
+                }
+
                 // Verifies that the number of mines in this combination is not invalid for each individual CellGroup
-                for cell_group in sub_group.iter() {
+                for (cell_group, bitmask) in &cell_group_bitmasks {
                     // Stores how many mines are in a CellGroup for this particular arrangement of mines.
-                    let mut individual_cell_group_mine_num_for_specific_combination = 0;
-                    // For every offset in CellGroup.
-                    for offset in &cell_group.offsets {
-                        // If the offset is a mine.
-                        if combination.contains(&offset) {
-                            // Count up how many mines are in the CellGroup for this arrangement.
-                            individual_cell_group_mine_num_for_specific_combination += 1;
-                        }
-                    }
+                    let individual_cell_group_mine_num_for_specific_combination = {
+                        // Should really do an and operation here but & is not defined for FixedBitSet. cloning and and assigning with that is slower by ~30% (32 vs 47)
+                        combination_bitmask.intersection(bitmask).count()
+                    };
                     // If the amount of mines isn't the right amount.
                     // Go to the next combination because this one doesn't work.
                     if individual_cell_group_mine_num_for_specific_combination
-                        != cell_group.mine_num
+                        != cell_group.mine_num.try_into().unwrap()
                     {
                         continue 'combinations;
                     }
@@ -1417,8 +1447,10 @@ impl Game {
                 // Since the amount of mines is correct.
                 // For every offset in this valid combination.
                 // Increment the amount of mines at each offset.
-                for offset in combination {
-                    *(occurrences_of_mine_per_offset.get_mut(offset).unwrap()) += 1;
+                for bit_pos in &combination {
+                    *(occurrences_of_mine_per_offset
+                        .get_mut(&bit_pos_to_offset[bit_pos])
+                        .unwrap()) += 1;
                 }
 
                 // Since the arrangement is valid increment the number of valid arrangements.
@@ -2375,7 +2407,7 @@ mod tests {
         } else {
             iteration_cnt = 10_000;
         }
-        (0..iteration_cnt).into_par_iter().for_each(|_| {
+        (0..iteration_cnt).into_iter().for_each(|_| {
             let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
             match game.solve(initial_guess, true) {
                 Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
