@@ -1399,22 +1399,15 @@ impl Game {
         let cell_group_bitmasks = {
             let mut out = HashSet::new();
             for cell_group in sub_group {
-                let mut temp = fixedbitset::FixedBitSet::with_capacity_and_blocks(
-                    sub_group_total_offsets_after_overlaps_removed.len(),
-                    None,
-                );
+                let mut temp = 0usize;
                 for offset in &cell_group.offsets {
-                    temp.set(offset_to_bit_pos[offset], true);
+                    temp |= 1 << offset_to_bit_pos[offset];
                 }
                 out.insert((*cell_group, temp));
             }
             out
         };
         let mut number_of_valid_combinations = 0;
-        let mut combination_bitmask = fixedbitset::FixedBitSet::with_capacity_and_blocks(
-            sub_group_total_offsets_after_overlaps_removed.len(),
-            None,
-        );
         for sub_group_mine_num in
             1.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
         {
@@ -1424,17 +1417,17 @@ impl Game {
                 .combinations(sub_group_mine_num)
             {
                 // Initialize the mask and set the positions that are selected this combination as ones.
-                combination_bitmask.clear();
+                let mut combination_bitmask = 0usize;
                 for bit_pos in &combination {
-                    combination_bitmask.set(*bit_pos, true);
+                    combination_bitmask |= 1 << bit_pos;
                 }
 
                 // Verifies that the number of mines in this combination is not invalid for each individual CellGroup
                 for (cell_group, bitmask) in &cell_group_bitmasks {
                     // Stores how many mines are in a CellGroup for this particular arrangement of mines.
                     let individual_cell_group_mine_num_for_specific_combination = {
-                        // Should really do an and operation here but & is not defined for FixedBitSet. Cloning and assigning with that is slower by ~30% (32 vs 47)
-                        combination_bitmask.intersection(bitmask).count()
+                        // Should really do an and operation here but & is not defined for FixedBitSet. cloning and assigning with that is slower by ~30% (32 vs 47)
+                        (combination_bitmask & bitmask).count_ones()
                     };
                     // If the amount of mines isn't the right amount.
                     // Go to the next combination because this one doesn't work.
