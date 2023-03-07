@@ -1396,6 +1396,12 @@ impl Game {
             .enumerate()
             .map(|(i, offset)| (i, *offset))
             .collect();
+
+        // Must fit in a usize to do this method. For expert mode these values shouldn't be reached.
+        // TODO fallback to previous method for larger.
+        assert!(offset_to_bit_pos.len() <= usize::BITS.try_into().unwrap());
+        assert!(sub_group_mine_num_upper_limit <= usize::BITS.try_into().unwrap());
+
         let cell_group_bitmasks = {
             let mut out = HashSet::new();
             for cell_group in sub_group {
