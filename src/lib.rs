@@ -1433,7 +1433,7 @@ impl Game {
                 for (cell_group, bitmask) in &cell_group_bitmasks {
                     // Stores how many mines are in a CellGroup for this particular arrangement of mines.
                     let individual_cell_group_mine_num_for_specific_combination = {
-                        // Should really do an and operation here but & is not defined for FixedBitSet. cloning and and assigning with that is slower by ~30% (32 vs 47)
+                        // Should really do an and operation here but & is not defined for FixedBitSet. Cloning and assigning with that is slower by ~30% (32 vs 47)
                         combination_bitmask.intersection(bitmask).count()
                     };
                     // If the amount of mines isn't the right amount.
@@ -2407,7 +2407,7 @@ mod tests {
         } else {
             iteration_cnt = 10_000;
         }
-        (0..iteration_cnt).into_iter().for_each(|_| {
+        (0..iteration_cnt).into_par_iter().for_each(|_| {
             let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
             match game.solve(initial_guess, true) {
                 Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
