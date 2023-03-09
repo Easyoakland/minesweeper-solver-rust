@@ -26,7 +26,7 @@ captrs = "0.3.1"
 image = "0.24.0"
 enigo = "0.0.14"
 enum-iterator = "1.2.0"
-itertools = "0.10.5"
+itertools = { version = "0.10.5", path = "../itertools" }
 rand = "0.8.5"
 rayon = "1.6.1"
 bitvec = "1.0.1"

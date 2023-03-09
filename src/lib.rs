@@ -4,6 +4,7 @@ use captrs::{Bgr8, Capturer};
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
 use image::{imageops, io, DynamicImage, GenericImageView, RgbImage};
+use itertools::structs::combinations_lending::LendingIterator;
 use itertools::Itertools;
 use std::{
     collections::{HashMap, HashSet},
@@ -1418,15 +1419,15 @@ impl Game {
             1.max(sub_group_mine_num_lower_limit)..(sub_group_mine_num_upper_limit + 1)
         {
             // Count up how many times a mine occurs in each offset position.
-            'combinations: for combination in (0..(sub_group_total_offsets_after_overlaps_removed
-                .len()))
-                .combinations(sub_group_mine_num)
-            {
+            // TODO Generating and allocating vectors to store each combination takes up 27%-36% of runtime. A faster implementation should be used.
+            let mut combinations_iter = (0..(sub_group_total_offsets_after_overlaps_removed.len()))
+                .combinations_lending(sub_group_mine_num);
+            'combinations: while let Some(combination) = combinations_iter.next() {
                 // Initialize the mask and set the positions that are selected this combination as ones.
                 let mut combination_bitmask = 0usize;
-                for bit_pos in &combination {
+                (combination.clone()).for_each(|bit_pos| {
                     combination_bitmask |= 1 << bit_pos;
-                }
+                });
 
                 // Verifies that the number of mines in this combination is not invalid for each individual CellGroup
                 for (cell_group, bitmask) in &cell_group_bitmasks {
@@ -1446,11 +1447,11 @@ impl Game {
                 // Since the amount of mines is correct.
                 // For every offset in this valid combination.
                 // Increment the amount of mines at each offset.
-                for bit_pos in &combination {
+                (combination).for_each(|bit_pos| {
                     *(occurrences_of_mine_per_offset
-                        .get_mut(&bit_pos_to_offset[bit_pos])
+                        .get_mut(&bit_pos_to_offset[&bit_pos])
                         .unwrap()) += 1;
-                }
+                });
 
                 // Since the arrangement is valid increment the number of valid arrangements.
                 number_of_valid_combinations += 1;
@@ -1817,7 +1818,7 @@ impl Game {
                 if combination_total > MAX_COMBINATIONS {
                     if LOGGING {
                         println!("Not computing {combination_total} total combinations.");
-                        unreachable!() // TODO remove this after handling this possibility with a fast guess method.
+                        unimplemented!() // TODO remove this after handling this possibility with a fast guess method.
                     }
                     // Return that nothing was done.
                     return 0;
@@ -1976,9 +1977,6 @@ impl Game {
     /// # Panics
     /// If it can't save to file path specified.
     pub fn save_state_info(&self, path: &str, simulate: bool) {
-        // save saved game state as picture
-        // TODO reimplement in rust // game.showGameSavedState().save("FinalGameState.png");
-
         // Save game state as csv.
         // Write create truncate can be set with `let log_file = File::create(&log_file_name).unwrap();` or as below.
         // Write state to file after formatting nicely.
