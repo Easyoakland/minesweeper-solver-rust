@@ -849,9 +849,10 @@ impl Game {
     /// Left clicks indicated cord
     fn click_left_cell_cord(&self, cord: CellCord) {
         let mut enigo = Enigo::new();
-        // Add extra 1 pixel so the click is definitely within the cell instead of maybe on the boundary.
-        let x = self.cell_positions[cord.0].0 + 1;
-        let y = self.cell_positions[cord.1 * self.board_cell_width as usize].1 + 1;
+        // Add extra 2 pixel so the click is definitely within the cell instead of maybe on the boundary.
+        // Not entirely sure why this is necessary but it fixes a bug where the cell isn't clicked close enough to the center
+        let x = self.cell_positions[cord.0].0 + 2;
+        let y = self.cell_positions[cord.1 * self.board_cell_width as usize].1 + 2;
         enigo.mouse_move_to(x, y);
         enigo.mouse_down(enigo::MouseButton::Left);
         enigo.mouse_up(enigo::MouseButton::Left);
@@ -860,9 +861,10 @@ impl Game {
     /// Right click indicated cord
     fn click_right_cell_cord(&self, cord: CellCord) {
         let mut enigo = Enigo::new();
-        // Add extra 1 pixel so the click is definitely within the cell instead of maybe on the boundary.
-        let x = self.cell_positions[cord.0].0 + 1;
-        let y = self.cell_positions[cord.1 * self.board_cell_width as usize].1 + 1;
+        // Add extra 2 pixel so the click is definitely within the cell instead of maybe on the boundary.
+        // Not entirely sure why this is necessary but it fixes a bug where the cell isn't clicked close enough to the center
+        let x = self.cell_positions[cord.0].0 + 2;
+        let y = self.cell_positions[cord.1 * self.board_cell_width as usize].1 + 2;
         enigo.mouse_move_to(x, y);
         enigo.mouse_down(enigo::MouseButton::Right);
         enigo.mouse_up(enigo::MouseButton::Right);
