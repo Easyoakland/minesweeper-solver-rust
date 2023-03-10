@@ -4,8 +4,7 @@ use captrs::{Bgr8, Capturer};
 use enigo::{Enigo, MouseControllable};
 use enum_iterator::{all, Sequence};
 use image::{imageops, io, DynamicImage, GenericImageView, RgbImage};
-use itertools::structs::combinations_lending::LendingIterator;
-use itertools::Itertools;
+use itertools::{Itertools, LendingIterator};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
