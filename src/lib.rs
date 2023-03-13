@@ -346,10 +346,10 @@ pub fn prime_factorize(mut n: u32) -> Vec<u32> {
 
 /// Calculates from iter and saturates at bound.
 #[must_use]
-pub fn saturating_product<I: Iterator<Item = u32>>(mut iter: I) -> u64 {
+pub fn saturating_product<I: Iterator<Item = u32>>(iter: I) -> u64 {
     let mut out = 1u64;
-    while let Some(item) = iter.next() {
-        out = match out.checked_mul(item as u64) {
+    for item in iter {
+        out = match out.checked_mul(u64::from(item)) {
             Some(x) => x,
             None => return u64::MAX,
         }
@@ -384,7 +384,7 @@ pub fn saturating_combinations(n: u32, r: u32) -> u128 {
             if numerator.len() > 1 {
                 numerator.swap_remove(i - 1);
             } else {
-                numerator[0];
+                numerator[0] = 1;
                 break;
             }
             if denominator1.len() > 1 {
@@ -404,7 +404,7 @@ pub fn saturating_combinations(n: u32, r: u32) -> u128 {
             if numerator.len() > 1 {
                 numerator.swap_remove(i - 1);
             } else {
-                numerator[0];
+                numerator[0] = 1;
                 break;
             }
             if denominator2.len() > 1 {
@@ -417,10 +417,11 @@ pub fn saturating_combinations(n: u32, r: u32) -> u128 {
         }
     }
 
-    ((saturating_product(numerator.iter().map(|&x| x)) as u128)
-        / (saturating_product(denominator1.iter().map(|&x| x))
-            * saturating_product(denominator2.iter().map(|&x| x))) as u128)
-        .into()
+    u128::from(saturating_product(numerator.iter().copied()))
+        / u128::from(
+            saturating_product(denominator1.iter().copied())
+                * saturating_product(denominator2.iter().copied()),
+        )
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -471,7 +472,7 @@ fn merge_overlapping_groups_first_order(input: &[CellGroup]) -> Vec<Vec<&CellGro
 /// For each Subgroup if input element intersects then merge element into `Subgroup` and mark the `Subgroup`.
 /// Then remove all marked Subgroup and combine before adding back.
 /// If doesn't intersect make new Subgroup.
-fn merge_overlapping_groups<'a>(input: &'a [CellGroup]) -> Vec<HashSet<&'a CellGroup>> {
+fn merge_overlapping_groups(input: &[CellGroup]) -> Vec<HashSet<&CellGroup>> {
     #[derive(Debug, Default)]
     struct Subgroup {
         offsets: HashSet<usize>,
@@ -479,7 +480,7 @@ fn merge_overlapping_groups<'a>(input: &'a [CellGroup]) -> Vec<HashSet<&'a CellG
     }
 
     let mut state: Vec<Subgroup> = Vec::new();
-    for (i, e) in input.into_iter().enumerate() {
+    for (i, e) in input.iter().enumerate() {
         let mut marks = vec![];
         let mut temp = vec![Subgroup {
             offsets: e.offsets.clone(),
@@ -1612,51 +1613,67 @@ impl Game {
         for group in local_groups {
             let group_total_offsets_no_overlap = {
                 let mut temp = HashSet::new();
-                group.iter().for_each(|&x| {
+                for &x in &group {
                     x.offsets.iter().for_each(|&y| {
                         temp.insert(y);
                     });
-                });
+                }
                 temp
             };
 
-            let validator = |individual_cell_group_mine_num_for_specific_combination: u32,
-                             cell_group: &CellGroup|
-             -> bool {
-                {
-                    // Verifies that the number of mines left to find for the `CellGroup`
-                    // is not more than the amount of spots it has left to fill.
-                    if cell_group
-                        .mine_num
-                        .saturating_sub(individual_cell_group_mine_num_for_specific_combination)
-                        > cell_group
-                            .offsets
-                            .difference(&group[0].offsets)
-                            .count()
-                            .try_into()
-                            .unwrap()
-                    {
-                        false
-                    }
-                    // Verifies that the number of mines placed in the `CellGroup` is not greater the `CellGroup` mine_num
-                    else if individual_cell_group_mine_num_for_specific_combination
-                        > cell_group.mine_num
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                }
-            };
+            // Enumerate all possibilities for the group finding how often mines appear in each location.
+            // Could be `enumerate_all_arrangements` but this is faster in benchmarks.
+            let (number_of_valid_combinations, occurrences_of_mine_per_offset) = {
+                let mut occurrences_of_mine_per_offset: HashMap<_, _> =
+                    group_total_offsets_no_overlap
+                        .iter()
+                        .map(|&offset| (offset, 0))
+                        .collect();
+                let mut number_of_valid_combinations = 0;
 
-            let (number_of_valid_combinations, occurrences_of_mine_per_offset) =
-                Game::enumerate_all_possible_arrangements(
-                    group[0].mine_num.try_into().unwrap(),
-                    group[0].mine_num.try_into().unwrap(),
-                    &group_total_offsets_no_overlap,
-                    group.iter(),
-                    &validator,
-                );
+                // For each possible arrangement of mines for the particular cell that is being examined.
+                'combinations: for combination in group[0]
+                    .offsets
+                    .iter()
+                    .combinations(group[0].mine_num.try_into().unwrap())
+                {
+                    // Count up how many times a mine occurs in each offset position.
+                    for cell_group in &group {
+                        // Stores how many mines are in `cell_group` for this particular arrangement of mines.
+                        let mut individual_cell_group_mine_num_for_specific_combination = 0;
+                        // For every offset in `cell_group`.
+                        for offset in &cell_group.offsets {
+                            // If the offset is a mine.
+                            if combination.contains(&offset) {
+                                // Increment how many mines are in `cell_group` for this arrangement.
+                                individual_cell_group_mine_num_for_specific_combination += 1;
+                            }
+                        }
+                        // Verifies that the number of mines left to find for the `CellGroup`
+                        // is not more than the amount of spots it has left to fill.
+                        if cell_group.mine_num.saturating_sub(individual_cell_group_mine_num_for_specific_combination)
+                            > cell_group.offsets.difference(&group[0].offsets).count().try_into().unwrap()
+                            // Verifies that the number of mines placed in the `CellGroup` is not greater the `CellGroup` mine_num
+                            || individual_cell_group_mine_num_for_specific_combination
+                            > cell_group.mine_num
+                        {
+                            continue 'combinations;
+                        }
+                    }
+
+                    // Since the amount of mines is correct.
+                    // For every offset in this valid combination
+                    // increment the amount of mines at each offset.
+                    for offset in combination {
+                        *(occurrences_of_mine_per_offset.get_mut(offset).unwrap()) += 1;
+                    }
+
+                    // Since the arrangement is valid increment the number of valid arrangements.
+                    number_of_valid_combinations += 1;
+                }
+
+                (number_of_valid_combinations, occurrences_of_mine_per_offset)
+            };
 
             // Check each position of the particular cell being examined.
             for &offset in &group[0].offsets {
@@ -1772,6 +1789,15 @@ impl Game {
 
         // For each independent sub group of cell_groups.
         for sub_group in sub_groups {
+            fn validator(
+                individual_cell_group_mine_num_for_specific_combination: u32,
+                cell_group: &CellGroup,
+            ) -> bool {
+                // If the amount of mines isn't the right amount.
+                // Go to the next combination because this one doesn't work.
+                individual_cell_group_mine_num_for_specific_combination == cell_group.mine_num
+            }
+
             let (
                 sub_group_mine_num_lower_limit,
                 sub_group_mine_num_upper_limit,
@@ -1806,25 +1832,13 @@ impl Game {
                 }
             }
 
-            fn validator(
-                individual_cell_group_mine_num_for_specific_combination: u32,
-                cell_group: &CellGroup,
-            ) -> bool {
-                // If the amount of mines isn't the right amount.
-                // Go to the next combination because this one doesn't work.
-                if individual_cell_group_mine_num_for_specific_combination != cell_group.mine_num {
-                    false
-                } else {
-                    true
-                }
-            }
             let (number_of_valid_combinations, occurrences_of_mine_per_offset) =
                 Game::enumerate_all_possible_arrangements(
                     sub_group_mine_num_lower_limit,
                     sub_group_mine_num_upper_limit,
                     &sub_group_total_offsets_after_overlaps_removed,
                     &sub_group,
-                    &validator,
+                    validator,
                 );
             if number_of_valid_combinations <= 0 {
                 self.save_state_info("test/FinalGameState.csv", simulate);
@@ -1914,10 +1928,8 @@ impl Game {
                         .filter(|&&x| x == CellKind::Unexplored)
                         .count();
                     // If the number of combinations added by the endgame cell group is less than the max combinations then add it.
-                    if saturating_combinations(
-                        unexplored_count.try_into().unwrap(),
-                        self.mine_num.try_into().unwrap(),
-                    ) <= MAX_COMBINATIONS as u128
+                    if saturating_combinations(unexplored_count.try_into().unwrap(), self.mine_num)
+                        <= MAX_COMBINATIONS
                     {
                         self.cell_groups.push(CellGroup {
                             offsets: self
@@ -2390,10 +2402,9 @@ mod tests {
         let win_cnt = Mutex::new(0);
         let lose_cnt = Mutex::new(0);
         let unfinished_cnt = Mutex::new(0);
-        let iteration_cnt;
         let initial_guess = CellCord(2, 3);
         // 10x faster on release so 10x more iterations can be done.
-        iteration_cnt = 1_000 * {
+        let iteration_cnt = 1_000 * {
             if cfg!(debug_assertions) {
                 1
             } else {
