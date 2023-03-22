@@ -21,7 +21,7 @@ fn main() {
         0,
     );
 
-    if let Err(e) = game.solve(CellCord(2, 3), false) {
+    if let Err(e) = game.solve(CellCord(3, 3), false) {
         panic!("{e}");
     }
     game.save_state_info("test/FinalGameState.csv", false);
