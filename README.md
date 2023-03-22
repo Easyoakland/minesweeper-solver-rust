@@ -1,3 +1,4 @@
+![demo gif](/demo.gif)
 - This project solves minesweeper.
 - It has a `42%` win-rate.
 - It can simulate a full game in `1 ms` on a single core and can run a simulation on each core simultaneously. Caching, avoiding heap allocations, and other optimizations are used to bring the time this low.
@@ -15,5 +16,3 @@
 - In `lib.rs` there are some configuration options.
     - `TIMEOUTS_ATTEMPTS_NUM` controls how many times the program is willing to re-scan the page for an update. This exists because sometimes the board is screenshotted to be analyzed before the board updates.
     - `MAX_COMBINATIONS` controls how many combinations the probabilistic guess method is willing to go through before giving up and using a less accurate but quicker guess method instead.
-
-![demo gif](/demo.gif)
