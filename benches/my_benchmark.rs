@@ -1,10 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use image::io;
 use minesweeper_solver_in_rust::{
-    locate_all, read_image, setup_capturer, CellCord, Game, GameError,
+    locate_all, read_image, setup_capturer, CellCord, Game, GameError, HashSet,
 };
 use rand::{seq::SliceRandom, thread_rng};
-use std::collections::HashSet;
 
 /* fn fibonacci(n: u64) -> u64 {
     /*     match n {
@@ -71,7 +70,8 @@ fn test_identify_cell_benchmark(c: &mut Criterion) {
 }
 
 fn sort_binary_or_linear_or_hashmap(c: &mut Criterion) {
-    let list1 = HashSet::from([1, 2, 3, 4, 5, 6, 7, 200, 12, 10, 12, 13, 14, 15, 16]);
+    let list1 =
+        HashSet::from_iter([1, 2, 3, 4, 5, 6, 7, 200, 12, 10, 12, 13, 14, 15, 16].into_iter());
     let mut list2 = [7, 6, 5, 4, 3, 2, 1, 99, 88];
     fn linear_test(list1: &HashSet<i32>, list2: [i32; 9]) -> i32 {
         let mut count = 0;
@@ -93,7 +93,7 @@ fn sort_binary_or_linear_or_hashmap(c: &mut Criterion) {
     }
     fn hashmap_test(list1: &HashSet<i32>, list2: [i32; 9]) -> i32 {
         let mut count = 0;
-        let list2 = HashSet::from(list2);
+        let list2 = HashSet::from_iter(list2.into_iter());
         for item in list1 {
             if list2.contains(&item) {
                 count += 1;
@@ -119,18 +119,12 @@ fn sort_binary_or_linear_or_hashmap(c: &mut Criterion) {
 
 fn simulate_win_rate_one_cell_benchmark(c: &mut Criterion) {
     fn simulate_win_rate_one_cell_one_time() {
-        use std::sync::Mutex;
-        let win_cnt = Mutex::new(0);
-        let lose_cnt = Mutex::new(0);
-        let unfinished_cnt = Mutex::new(0);
         let initial_guess = CellCord(2, 3);
         let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
         match game.solve(initial_guess, true) {
-            Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
-            Ok(_) => *win_cnt.lock().unwrap() += 1,
-            Err(GameError::Unfinished) => {
-                *unfinished_cnt.lock().unwrap() += 1;
-            }
+            Err(GameError::RevealedMine(_)) => (),
+            Ok(_) => (),
+            Err(GameError::Unfinished) => (),
             Err(e) => panic!("{e}"),
         };
     }

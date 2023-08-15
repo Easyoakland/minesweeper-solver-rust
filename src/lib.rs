@@ -1,3 +1,4 @@
+use ahash::AHasher;
 #[allow(unused_imports)] // Lsb0 is indicated as unused but it is not unused.
 use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use cached::proc_macro::cached;
@@ -7,15 +8,17 @@ use enum_iterator::{all, Sequence};
 use image::{imageops, io, DynamicImage, GenericImageView, RgbImage};
 use itertools::{Itertools, LendingIterator};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     error::Error,
     fmt,
     fs::OpenOptions,
-    hash::{Hash, Hasher},
+    hash::{BuildHasherDefault, Hash, Hasher},
     io::prelude::*,
     mem::take,
     ops::{Add, Sub},
 };
+
+pub type HashSet<T> = std::collections::HashSet<T, BuildHasherDefault<AHasher>>;
 
 const TIMEOUTS_ATTEMPTS_NUM: u8 = 10;
 const MAX_COMBINATIONS: u128 = 200_000;
@@ -252,10 +255,7 @@ fn remove_complete_cell_group_overlaps(
             // If it is a different set and it is a subset.
             if (i != j) && set1.is_subset(set2) {
                 // Remove items that are shared from the superset.
-                // Below code should be equivalent to next line. Not using next line because it is an unstable library feature.
-                // let set2: HashSet<usize> = set2.drain_filter(|elem| set1.contains(elem)).collect();
-                let set3: HashSet<usize> = set2.difference(&set1).copied().collect();
-                *set2 = set3;
+                *set2 = set2.drain().filter(|elem| !set1.contains(elem)).collect();
 
                 did_something = true;
 
@@ -485,7 +485,7 @@ fn merge_overlapping_groups(input: &[CellGroup]) -> Vec<HashSet<&CellGroup>> {
         let mut temp = vec![Subgroup {
             offsets: e.offsets.clone(),
             sets: {
-                let mut set = HashSet::new();
+                let mut set = HashSet::default();
                 set.insert(i);
                 set
             },
@@ -516,7 +516,7 @@ fn merge_overlapping_groups(input: &[CellGroup]) -> Vec<HashSet<&CellGroup>> {
     }
     let mut out = vec![];
     for subgroup in state {
-        let mut set = HashSet::new();
+        let mut set = HashSet::default();
         for set_idx in subgroup.sets {
             set.insert(&input[set_idx]);
             // set.insert(set_idx); // inserts indexes in input instead of values
@@ -1220,7 +1220,7 @@ impl Game {
     // Generates a set for a given cell.
     fn generate_cell_group(&self, cell: &Cell) -> Option<CellGroup> {
         // Make a set for all locations given as an offset.
-        let mut offsets = HashSet::new();
+        let mut offsets = HashSet::default();
         let mut flag_cnt = 0;
         // For every neighbor of the given cell.
         for neighbor in cell.neighbors(1, self.board_cell_width, self.board_cell_height) {
@@ -1410,7 +1410,7 @@ impl Game {
         assert!(sub_group_mine_num_upper_limit <= usize::BITS.try_into().unwrap());
 
         let cell_group_bitmasks = {
-            let mut out = HashSet::new();
+            let mut out = HashSet::default();
             for cell_group in sub_group {
                 let mut temp = 0usize;
                 for offset in &cell_group.offsets {
@@ -1612,7 +1612,7 @@ impl Game {
         // For each of these groups
         for group in local_groups {
             let group_total_offsets_no_overlap = {
-                let mut temp = HashSet::new();
+                let mut temp = HashSet::default();
                 for &x in &group {
                     x.offsets.iter().for_each(|&y| {
                         temp.insert(y);
@@ -2210,22 +2210,22 @@ mod tests {
         let cell_group_vec = vec![
             CellGroup {
                 mine_num: 3,
-                offsets: HashSet::from([1, 2, 3, 4, 5]),
+                offsets: HashSet::from_iter([1, 2, 3, 4, 5].into_iter()),
             },
             CellGroup {
                 mine_num: 2,
-                offsets: HashSet::from([1, 2, 3, 4]),
+                offsets: HashSet::from_iter([1, 2, 3, 4].into_iter()),
             },
         ];
         let (result_bool, result_of_no_overlap) =
             remove_complete_cell_group_overlaps(cell_group_vec);
         assert!(result_bool);
         assert!(result_of_no_overlap.contains(&CellGroup {
-            offsets: HashSet::from([4, 2, 1, 3]),
+            offsets: HashSet::from_iter([4, 2, 1, 3].into_iter()),
             mine_num: 2,
         }));
         assert!(result_of_no_overlap.contains(&CellGroup {
-            offsets: HashSet::from([5]),
+            offsets: HashSet::from_iter([5].into_iter()),
             mine_num: 1,
         }));
     }
@@ -2233,15 +2233,15 @@ mod tests {
     #[test]
     fn merge_overlapping_groups_test() {
         let cell1 = CellGroup {
-            offsets: HashSet::from([1, 2]),
+            offsets: HashSet::from_iter([1, 2].into_iter()),
             mine_num: 1,
         };
         let cell2 = CellGroup {
-            offsets: HashSet::from([1, 2, 3]),
+            offsets: HashSet::from_iter([1, 2, 3].into_iter()),
             mine_num: 2,
         };
         let cell3 = CellGroup {
-            offsets: HashSet::from([8, 9, 10]),
+            offsets: HashSet::from_iter([8, 9, 10].into_iter()),
             mine_num: 2,
         };
         let groups = vec![cell1.clone(), cell2.clone(), cell3.clone()];
@@ -2252,19 +2252,19 @@ mod tests {
 
         let groups = vec![
             CellGroup {
-                offsets: HashSet::from([248, 249]),
+                offsets: HashSet::from_iter([248, 249].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([278, 248]),
+                offsets: HashSet::from_iter([278, 248].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([279, 249]),
+                offsets: HashSet::from_iter([279, 249].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([279, 278]),
+                offsets: HashSet::from_iter([279, 278].into_iter()),
                 mine_num: 1,
             },
         ];
@@ -2273,39 +2273,39 @@ mod tests {
 
         let groups = vec![
             CellGroup {
-                offsets: HashSet::from([1, 2]),
+                offsets: HashSet::from_iter([1, 2].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([5, 4]),
+                offsets: HashSet::from_iter([5, 4].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([6, 7]),
+                offsets: HashSet::from_iter([6, 7].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([7, 2]),
+                offsets: HashSet::from_iter([7, 2].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([5, 6]),
+                offsets: HashSet::from_iter([5, 6].into_iter()),
                 mine_num: 1,
             },
             CellGroup {
-                offsets: HashSet::from([20, 200]),
+                offsets: HashSet::from_iter([20, 200].into_iter()),
                 mine_num: 1,
             },
         ];
         let output = merge_overlapping_groups(&groups);
-        let mut set_extra = HashSet::new();
+        let mut set_extra = HashSet::default();
         set_extra.insert(&groups[5]);
         assert_eq!(
             output,
             vec![
                 groups
                     .iter()
-                    .filter(|x| x.offsets != HashSet::from([20, 200]))
+                    .filter(|x| x.offsets != HashSet::from_iter([20, 200].into_iter()))
                     .collect::<HashSet<_>>(),
                 set_extra
             ]
@@ -2316,27 +2316,27 @@ mod tests {
     fn merge_overlapping_first_order_test() {
         let groups = vec![
             CellGroup {
-                offsets: HashSet::from([1, 2]),
+                offsets: HashSet::from_iter([1, 2].into_iter()),
                 ..CellGroup::default()
             }, // 0
             CellGroup {
-                offsets: HashSet::from([5, 4]),
+                offsets: HashSet::from_iter([5, 4].into_iter()),
                 ..CellGroup::default()
             }, // 1
             CellGroup {
-                offsets: HashSet::from([6, 7]),
+                offsets: HashSet::from_iter([6, 7].into_iter()),
                 ..CellGroup::default()
             }, // 2
             CellGroup {
-                offsets: HashSet::from([7, 2]),
+                offsets: HashSet::from_iter([7, 2].into_iter()),
                 ..CellGroup::default()
             }, // 3
             CellGroup {
-                offsets: HashSet::from([5, 6]),
+                offsets: HashSet::from_iter([5, 6].into_iter()),
                 ..CellGroup::default()
             }, // 4
             CellGroup {
-                offsets: HashSet::from([200, 20]),
+                offsets: HashSet::from_iter([200, 20].into_iter()),
                 ..CellGroup::default()
             }, // 5
         ];
@@ -2398,31 +2398,30 @@ mod tests {
     #[test]
     fn simulate_win_rate_one_cell() {
         use rayon::prelude::*;
-        use std::sync::Mutex;
-        let win_cnt = Mutex::new(0);
-        let lose_cnt = Mutex::new(0);
-        let unfinished_cnt = Mutex::new(0);
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let win_cnt = AtomicUsize::new(0);
+        let lose_cnt = AtomicUsize::new(0);
+        let unfinished_cnt = AtomicUsize::new(0);
         let initial_guess = CellCord(3, 3);
         // 10x faster on release so 10x more iterations can be done.
         let iteration_cnt = 1_000 * if cfg!(debug_assertions) { 1 } else { 10 };
         (0..iteration_cnt).into_par_iter().for_each(|_| {
             let mut game = Game::new_for_simulation(30, 16, 99, initial_guess);
             match game.solve(initial_guess, true) {
-                Err(GameError::RevealedMine(_)) => *lose_cnt.lock().unwrap() += 1,
-                Ok(_) => *win_cnt.lock().unwrap() += 1,
-                Err(GameError::Unfinished) => {
-                    *unfinished_cnt.lock().unwrap() += 1;
-                }
+                Err(GameError::RevealedMine(_)) => lose_cnt.fetch_add(1, Ordering::Relaxed),
+                Ok(_) => win_cnt.fetch_add(1, Ordering::Relaxed),
+                Err(GameError::Unfinished) => unfinished_cnt.fetch_add(1, Ordering::Relaxed),
                 Err(e) => panic!("{e}"),
-            }
+            };
         });
         {
-            println!("Win count: {}.", win_cnt.lock().unwrap());
-            println!("Lose count: {}.", lose_cnt.lock().unwrap());
-            println!("Unfinished count: {}.", unfinished_cnt.lock().unwrap());
-            *lose_cnt.lock().unwrap() += *unfinished_cnt.lock().unwrap();
-            let win_cnt = *win_cnt.lock().unwrap();
-            let winrate = win_cnt as f64 / (win_cnt + *lose_cnt.lock().unwrap()) as f64;
+            let win_cnt = win_cnt.into_inner();
+            let lose_cnt = lose_cnt.into_inner();
+            let unfinished_cnt = unfinished_cnt.into_inner();
+            println!("Win count: {}.", win_cnt);
+            println!("Lose count: {}.", lose_cnt);
+            println!("Unfinished count: {}.", unfinished_cnt);
+            let winrate = win_cnt as f64 / (win_cnt + lose_cnt + unfinished_cnt) as f64;
             let winrate = winrate * 100f64;
             println!("Winrate: {winrate}");
         }

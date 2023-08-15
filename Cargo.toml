@@ -23,11 +23,12 @@ name = "framerate_benchmarks"
 harness = false
 
 [dependencies]
-captrs = "0.3.1"
-image = "0.24.0"
-enigo = "0.0.14"
-enum-iterator = "1.2.0"
-itertools = { version = "*", git = "https://github.com/Easyoakland/itertools", branch = "initial_lending_iterator_support", features = ["default", "lending_iters"] }
-rand = "0.8.5"
+ahash = { version = "0.8.3", default-features = false }
 bitvec = "1.0.1"
 cached = { version = "0.42.0", default-features = false, features = ["proc_macro"] }
+captrs = "0.3.1"
+enigo = "0.0.14"
+enum-iterator = "1.2.0"
+image = "0.24.0"
+itertools = { version = "*", git = "https://github.com/Easyoakland/itertools", branch = "initial_lending_iterator_support", features = ["default", "lending_iters"] }
+rand = "0.8.5"
